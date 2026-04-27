@@ -3,7 +3,7 @@ class DistributedLockManager:
         self.locks = {}
 
     def acquire_lock(self, resource, node_id):
-        if resource not in self.locks:
+        if resource and resource not in self.locks:
             self.locks[resource] = node_id
             return True
         return False
@@ -13,3 +13,12 @@ class DistributedLockManager:
             del self.locks[resource]
             return True
         return False
+
+    def get_owner(self, resource):
+        return self.locks.get(resource)
+
+    def is_locked(self, resource):
+        return resource in self.locks
+
+    def list_locks(self):
+        return dict(self.locks)

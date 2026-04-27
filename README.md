@@ -1,12 +1,189 @@
 # Distributed Sync System
 
-Implementasi sistem sinkronisasi terdistribusi menggunakan Python.
+Implementasi sistem sinkronisasi terdistribusi menggunakan Python dengan Raft consensus dan distributed lock/queue management.
 
 ## Features
-- Distributed Lock Manager (Raft)
-- Distributed Queue
-- Cache Coherence
+- ✅ Raft Leader Election
+- ✅ Distributed Lock Manager
+- ✅ Distributed Queue System
+- 🔄 Cache Coherence (upcoming)
 
-## Run
+## Quick Start
+
+### 1. Setup Virtual Environment
+
 ```bash
-python main.py
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 1b. Environment Template
+
+File `.env.example` disediakan sebagai template konfigurasi proyek. Kalau nanti ingin memakai environment variable, cukup salin file itu menjadi `.env` lalu sesuaikan nilainya. Untuk demo saat ini, project tetap bisa dijalankan langsung dengan argumen CLI seperti di bawah.
+
+### 2. Jalankan 3 Node
+
+Terminal 1:
+```bash
+python main.py --id node1 --port 8001 --peers localhost:8002 localhost:8003
+```
+
+Terminal 2:
+```bash
+python main.py --id node2 --port 8002 --peers localhost:8001 localhost:8003
+```
+
+Terminal 3:
+```bash
+python main.py --id node3 --port 8003 --peers localhost:8001 localhost:8002
+```
+
+Tunggu hingga salah satu menampilkan `[nodeX] Became LEADER`.
+
+---
+
+## API Endpoints
+
+### Distributed Lock Manager
+
+#### Acquire Lock
+```powershell
+curl.exe -X POST http://localhost:8001/lock/acquire -H "Content-Type: application/json" -d '{\"resource\":\"file1\",\"node_id\":\"node1\"}'
+```
+
+Response (jika berhasil):
+```json
+{
+  "status": "ok",
+  "action": "acquire",
+  "resource": "file1",
+  "owner": "node1",
+  "leader_id": "node2",
+  "term": 1,
+  "state": "leader"
+}
+```
+
+#### Release Lock
+```powershell
+curl.exe -X POST http://localhost:8001/lock/release -H "Content-Type: application/json" -d '{\"resource\":\"file1\",\"node_id\":\"node1\"}'
+```
+
+#### Check Lock Status
+```powershell
+curl.exe -X GET http://localhost:8001/lock/status
+```
+
+---
+
+### Distributed Queue System
+
+#### Enqueue Item
+```powershell
+curl.exe -X POST http://localhost:8002/queue/enqueue -H "Content-Type: application/json" -d '{\"item\":\"job-1\",\"node_id\":\"node1\"}'
+```
+
+Response:
+```json
+{
+  "status": "ok",
+  "action": "enqueue",
+  "item": "job-1",
+  "requested_by": "node1",
+  "queue_size": 1,
+  "leader_id": "node2",
+  "term": 1,
+  "state": "leader"
+}
+```
+
+#### Dequeue Item
+```powershell
+curl.exe -X POST http://localhost:8002/queue/dequeue -H "Content-Type: application/json" -d '{\"node_id\":\"node1\"}'
+```
+
+#### Check Queue Status
+```powershell
+curl.exe -X GET http://localhost:8002/queue/status
+```
+
+---
+
+## Important Notes
+
+### PowerShell Command Format
+Untuk curl di PowerShell, gunakan format dengan escaped quotes:
+```powershell
+curl.exe -X POST http://localhost:PORT/endpoint -H "Content-Type: application/json" -d '{\"key\":\"value\"}'
+```
+
+### Follower Forwarding
+Jika kamu kirim request ke follower node, request akan otomatis diteruskan ke leader:
+```powershell
+# Ini ke node1 (follower)
+curl.exe -X POST http://localhost:8001/lock/acquire -H "Content-Type: application/json" -d '{\"resource\":\"file1\",\"node_id\":\"node1\"}'
+
+# Akan diteruskan ke leader otomatis
+```
+
+### Raft State
+Setiap response mencakup state leader terkini:
+- `leader_id`: ID leader yang aktif saat ini
+- `term`: Term saat ini
+- `state`: State node (leader/follower/candidate)
+
+---
+
+## Test
+
+Jalankan unit test:
+```bash
+python -m unittest discover -s tests/unit -p "test_*.py"
+```
+
+---
+
+## Architecture
+
+```
+Node (leader)
+├── Raft Consensus
+│   ├── Leader Election
+│   ├── Heartbeat
+│   └── Vote Management
+├── Lock Manager
+│   ├── acquire_lock
+│   ├── release_lock
+│   └── list_locks
+├── Queue Manager
+│   ├── enqueue
+│   ├── dequeue
+│   └── list_queue
+└── HTTP Server
+    ├── /message (Raft protocol)
+    ├── /lock/* (Lock endpoints)
+    ├── /queue/* (Queue endpoints)
+    └── /health (Health check)
+```
+
+---
+
+## Development
+
+Struktur project:
+```
+src/
+├── consensus/
+│   └── raft.py          # Raft consensus implementation
+├── nodes/
+│   ├── base_node.py     # Node HTTP server & request handling
+│   ├── lock_manager.py  # Distributed lock implementation
+│   └── queue_manager.py # Distributed queue implementation
+└── communication/
+    └── message_passing.py
+tests/unit/
+├── test_lock_manager.py
+└── test_queue_manager.py
+main.py                  # Entry point
+```
