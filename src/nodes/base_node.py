@@ -8,9 +8,10 @@ from src.nodes.queue_manager import DistributedQueueManager
 
 
 class BaseNode:
-    def __init__(self, node_id, host, port, peers=None):
+    def __init__(self, node_id, bind_host, port, peers=None, advertise_host=None):
         self.node_id = node_id
-        self.host = host
+        self.bind_host = bind_host
+        self.advertise_host = advertise_host or bind_host
         self.port = port
         self.peers = peers or []
         
@@ -71,7 +72,7 @@ class BaseNode:
         if not match:
             return None
 
-        return f"{self.host}:800{match.group(1)}"
+        return f"{self.advertise_host}:800{match.group(1)}"
 
     def leader_state_payload(self):
         return {
@@ -89,7 +90,7 @@ class BaseNode:
                 **self.leader_state_payload(),
             }, status=503)
 
-        if leader_address == f"{self.host}:{self.port}":
+        if leader_address == f"{self.advertise_host}:{self.port}":
             return None
 
         response = await self.get_json(leader_address, path, params=params)
@@ -117,7 +118,7 @@ class BaseNode:
                 **self.leader_state_payload(),
             }, status=503)
 
-        if leader_address == f"{self.host}:{self.port}":
+        if leader_address == f"{self.advertise_host}:{self.port}":
             return None
 
         response = await self.post_json(leader_address, path, payload)
@@ -354,7 +355,7 @@ class BaseNode:
                     **self.leader_state_payload(),
                 }, status=503)
 
-            if leader_address != f"{self.host}:{self.port}":
+            if leader_address != f"{self.advertise_host}:{self.port}":
                 response = await self.get_json(leader_address, '/cache/get', params={"key": key})
                 if response is None:
                     return web.json_response({
@@ -462,4 +463,4 @@ class BaseNode:
         self.app.on_startup.append(on_startup)
 
         print(f"Node {self.node_id} running at {self.host}:{self.port}")
-        web.run_app(self.app, host=self.host, port=self.port)
+        web.run_app(self.app, host=self.bind_host, port=self.port)

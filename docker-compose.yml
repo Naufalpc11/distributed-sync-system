@@ -1,0 +1,33 @@
+services:
+  node1:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    command: python main.py --id node1 --port 8001 --host 0.0.0.0 --advertise-host node1 --peers node2:8002 node3:8003
+    ports:
+      - "8001:8001"
+    environment:
+      PYTHONUNBUFFERED: "1"
+    restart: unless-stopped
+
+  node2:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    command: python main.py --id node2 --port 8002 --host 0.0.0.0 --advertise-host node2 --peers node1:8001 node3:8003
+    ports:
+      - "8002:8002"
+    environment:
+      PYTHONUNBUFFERED: "1"
+    restart: unless-stopped
+
+  node3:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    command: python main.py --id node3 --port 8003 --host 0.0.0.0 --advertise-host node3 --peers node1:8001 node2:8002
+    ports:
+      - "8003:8003"
+    environment:
+      PYTHONUNBUFFERED: "1"
+    restart: unless-stopped

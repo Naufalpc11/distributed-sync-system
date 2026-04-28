@@ -75,6 +75,28 @@ curl.exe -X POST http://localhost:8001/cache/delete -H "Content-Type: applicatio
 
 7. Hentikan semua node dengan `Ctrl + C` di masing-masing terminal.
 
+### 4. Jalankan dengan Docker
+
+Kalau kamu mau demo tanpa buka 3 terminal Python manual, pakai Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+Setelah container jalan, kamu bisa akses endpoint yang sama seperti demo manual. Contoh:
+
+```powershell
+curl.exe -X POST http://localhost:8001/lock/acquire -H "Content-Type: application/json" -d '{\"resource\":\"docker-lock\",\"node_id\":\"node1\"}'
+curl.exe -X POST http://localhost:8002/queue/enqueue -H "Content-Type: application/json" -d '{\"item\":\"docker-job\",\"node_id\":\"node1\"}'
+curl.exe -X POST http://localhost:8001/cache/set -H "Content-Type: application/json" -d '{\"key\":\"docker:key\",\"value\":{\"active\":true},\"node_id\":\"node1\"}'
+```
+
+Kalau mau stop container:
+
+```bash
+docker compose down
+```
+
 ---
 
 ## API Endpoints
