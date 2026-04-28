@@ -8,12 +8,15 @@ from src.nodes.queue_manager import DistributedQueueManager
 
 
 class BaseNode:
-    def __init__(self, node_id, bind_host, port, peers=None, advertise_host=None):
+    def __init__(self, node_id, bind_host, port, peers=None, advertise_host=None, region="local", peer_regions=None, latency_profile=None):
         self.node_id = node_id
         self.bind_host = bind_host
         self.advertise_host = advertise_host or bind_host
         self.port = port
         self.peers = peers or []
+        self.region = region
+        self.peer_regions = peer_regions or {}
+        self.latency_profile = latency_profile or {}
         
         self.app = web.Application()
         self.app.add_routes([
@@ -34,6 +37,7 @@ class BaseNode:
         self.cache_manager = DistributedCacheManager()
         self.lock_manager = DistributedLockManager()
         self.queue_manager = DistributedQueueManager()
+        self.replication_tasks = set()
         
     async def start_background_tasks(self, app):
         app.loop.create_task(self.raft.start())
@@ -62,6 +66,77 @@ class BaseNode:
                     return await resp.json()
             except Exception as e:
                 print(f"[{self.node_id}] Error getting from {peer}: {e}")
+
+    def get_peer_region(self, peer):
+        return self.peer_regions.get(peer, self.region)
+
+    def get_peer_latency(self, peer):
+        peer_region = self.get_peer_region(peer)
+        if peer_region == self.region:
+            return 0
+
+        latency_key = f"{self.region}->{peer_region}"
+        reverse_key = f"{peer_region}->{self.region}"
+
+        if latency_key in self.latency_profile:
+            return int(self.latency_profile[latency_key])
+
+        if reverse_key in self.latency_profile:
+            return int(self.latency_profile[reverse_key])
+
+        return 50
+
+    def ordered_peers_by_latency(self):
+        return sorted(self.peers, key=self.get_peer_latency)
+
+    def should_replicate_cache(self):
+        return bool(self.peers)
+
+    async def replicate_cache_write(self, key, value, version, requester, source="leader"):
+        if not self.should_replicate_cache():
+            return
+
+        for peer in self.ordered_peers_by_latency():
+            delay_ms = self.get_peer_latency(peer)
+            task = asyncio.create_task(self._replicate_cache_to_peer(peer, key, value, version, requester, source, delay_ms))
+            self.replication_tasks.add(task)
+            task.add_done_callback(self.replication_tasks.discard)
+
+    async def _replicate_cache_to_peer(self, peer, key, value, version, requester, source, delay_ms):
+        await asyncio.sleep(delay_ms / 1000)
+
+        payload = {
+            "key": key,
+            "value": value,
+            "node_id": requester,
+            "version": version,
+            "replica": True,
+            "source": source,
+        }
+
+        await self.post_json(peer, "/cache/set", payload)
+
+    async def replicate_cache_delete(self, key, requester, source="leader"):
+        if not self.should_replicate_cache():
+            return
+
+        for peer in self.ordered_peers_by_latency():
+            delay_ms = self.get_peer_latency(peer)
+            task = asyncio.create_task(self._replicate_cache_delete_to_peer(peer, key, requester, source, delay_ms))
+            self.replication_tasks.add(task)
+            task.add_done_callback(self.replication_tasks.discard)
+
+    async def _replicate_cache_delete_to_peer(self, peer, key, requester, source, delay_ms):
+        await asyncio.sleep(delay_ms / 1000)
+
+        payload = {
+            "key": key,
+            "node_id": requester,
+            "replica": True,
+            "source": source,
+        }
+
+        await self.post_json(peer, "/cache/delete", payload)
 
     def leader_address(self):
         leader_id = self.raft.leader_id
@@ -311,8 +386,9 @@ class BaseNode:
         key = data.get("key")
         value = data.get("value")
         requester = data.get("node_id", self.node_id)
+        is_replica = bool(data.get("replica", False))
 
-        if self.raft.state != "leader":
+        if not is_replica and self.raft.state != "leader":
             forwarded = await self.forward_to_leader('/cache/set', data)
             if forwarded is not None:
                 return forwarded
@@ -328,6 +404,9 @@ class BaseNode:
         stored = self.cache_manager.set(key, value, requester)
         if stored:
             entry = self.cache_manager.get(key)
+            if self.raft.state == "leader" and not is_replica:
+                asyncio.create_task(self.replicate_cache_write(key, entry["value"], entry["version"], requester))
+
             return web.json_response({
                 "status": "ok",
                 "action": "set",
@@ -335,6 +414,7 @@ class BaseNode:
                 "value": entry["value"],
                 "version": entry["version"],
                 "updated_by": entry["updated_by"],
+                "region": self.region,
                 **self.leader_state_payload(),
             })
 
@@ -391,8 +471,9 @@ class BaseNode:
 
         key = data.get("key")
         requester = data.get("node_id", self.node_id)
+        is_replica = bool(data.get("replica", False))
 
-        if self.raft.state != "leader":
+        if not is_replica and self.raft.state != "leader":
             forwarded = await self.forward_to_leader('/cache/delete', data)
             if forwarded is not None:
                 return forwarded
@@ -407,11 +488,15 @@ class BaseNode:
 
         deleted = self.cache_manager.delete(key)
         if deleted:
+            if self.raft.state == "leader" and not is_replica:
+                asyncio.create_task(self.replicate_cache_delete(key, requester))
+
             return web.json_response({
                 "status": "ok",
                 "action": "delete",
                 "key": key,
                 "requested_by": requester,
+                "region": self.region,
                 **self.leader_state_payload(),
             })
 
@@ -430,6 +515,7 @@ class BaseNode:
         return web.json_response({
             "status": "ok",
             "cache": self.cache_manager.list_cache(),
+            "region": self.region,
             **self.leader_state_payload(),
         })
             
@@ -462,5 +548,5 @@ class BaseNode:
 
         self.app.on_startup.append(on_startup)
 
-        print(f"Node {self.node_id} running at {self.host}:{self.port}")
+        print(f"Node {self.node_id} running at {self.bind_host}:{self.port}")
         web.run_app(self.app, host=self.bind_host, port=self.port)

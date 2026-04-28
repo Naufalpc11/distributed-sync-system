@@ -131,6 +131,41 @@ Kalau mau stop container:
 docker compose down
 ```
 
+### 5. Feature B - Geo-Distributed Demo
+
+Bonus ini sekarang bisa didemokan lewat Docker Compose dengan region simulated latency.
+
+Yang dipakai:
+
+- `REGION` untuk region node saat ini
+- `PEER_REGIONS` untuk memetakan node peer ke region
+- `LATENCY_PROFILE` untuk mensimulasikan latency antar region
+
+Contoh demo:
+
+```bash
+docker compose up --build
+```
+
+Lalu lakukan set cache di leader, misalnya:
+
+```powershell
+curl.exe -X POST http://localhost:8001/cache/set -H "Content-Type: application/json" -d '{\"key\":\"geo:key\",\"value\":{\"region\":\"asia\"},\"node_id\":\"node1\"}'
+```
+
+Setelah beberapa saat, cache itu akan tereplikasi ke node lain sesuai latency profile. Kamu bisa cek dari follower:
+
+```powershell
+curl.exe -X GET http://localhost:8002/cache/status
+curl.exe -X GET http://localhost:8003/cache/status
+```
+
+Kalau mau menjelaskan di presentasi, poin utamanya adalah:
+
+1. Node bisa dideploy di beberapa region secara simulasi.
+2. Routing replikasi cache mengikuti latency profile.
+3. Data akhirnya konsisten di node lain lewat eventual consistency.
+
 ---
 
 ## API Endpoints

@@ -34,6 +34,22 @@ class Config:
 
         return [peer.strip() for peer in peers_raw.split(",") if peer.strip()]
 
+    @staticmethod
+    def parse_key_value_map(raw_value: str | None) -> dict[str, str]:
+        if not raw_value:
+            return {}
+
+        mapping: dict[str, str] = {}
+        for item in raw_value.split(","):
+            item = item.strip()
+            if not item or ":" not in item:
+                continue
+
+            key, value = item.split(":", 1)
+            mapping[key.strip()] = value.strip()
+
+        return mapping
+
     @classmethod
     def from_env(cls) -> dict[str, Any]:
         bind_host = os.getenv("HOST", "localhost")
@@ -46,4 +62,7 @@ class Config:
             "advertise_host": advertise_host,
             "port": int(os.getenv("PORT", "8000")),
             "peers": peers,
+            "region": os.getenv("REGION", "local"),
+            "peer_regions": cls.parse_key_value_map(os.getenv("PEER_REGIONS")),
+            "latency_profile": cls.parse_key_value_map(os.getenv("LATENCY_PROFILE")),
         }

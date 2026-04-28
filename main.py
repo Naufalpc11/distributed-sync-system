@@ -32,6 +32,9 @@ def main():
         port=args.port or env_config["port"],
         peers=args.peers if args.peers is not None else env_config["peers"],
         advertise_host=args.advertise_host or env_config["advertise_host"],
+        region=env_config["region"],
+        peer_regions=env_config["peer_regions"],
+        latency_profile=env_config["latency_profile"],
     )
 
     node.run()

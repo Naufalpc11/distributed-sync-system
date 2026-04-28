@@ -8,6 +8,9 @@ services:
       - "8001:8001"
     environment:
       PYTHONUNBUFFERED: "1"
+      REGION: "asia"
+      PEER_REGIONS: "node2:asia,node3:us"
+      LATENCY_PROFILE: "asia->us:180,us->asia:180,asia->asia:20,us->us:20"
     restart: unless-stopped
 
   node2:
@@ -19,6 +22,9 @@ services:
       - "8002:8002"
     environment:
       PYTHONUNBUFFERED: "1"
+      REGION: "asia"
+      PEER_REGIONS: "node1:asia,node3:us"
+      LATENCY_PROFILE: "asia->us:180,us->asia:180,asia->asia:20,us->us:20"
     restart: unless-stopped
 
   node3:
@@ -30,4 +36,7 @@ services:
       - "8003:8003"
     environment:
       PYTHONUNBUFFERED: "1"
+      REGION: "us"
+      PEER_REGIONS: "node1:asia,node2:asia"
+      LATENCY_PROFILE: "asia->us:180,us->asia:180,asia->asia:20,us->us:20"
     restart: unless-stopped
