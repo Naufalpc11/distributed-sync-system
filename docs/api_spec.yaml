@@ -1,0 +1,228 @@
+openapi: 3.0.3
+info:
+  title: Distributed Sync System API
+  version: 1.0.0
+  description: HTTP API for Raft coordination, distributed locks, queueing, and cache coherence.
+servers:
+  - url: http://localhost:8001
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: Node is alive
+  /message:
+    post:
+      summary: Internal Raft message handler
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Message handled
+  /lock/acquire:
+    post:
+      summary: Acquire a lock
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LockRequest'
+      responses:
+        '200':
+          description: Lock granted
+        '409':
+          description: Lock is held
+  /lock/release:
+    post:
+      summary: Release a lock
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LockRequest'
+      responses:
+        '200':
+          description: Lock released
+        '409':
+          description: Release rejected
+  /lock/status:
+    get:
+      summary: List current locks
+      responses:
+        '200':
+          description: Current lock table
+  /admin/locks/deadlocks:
+    get:
+      summary: Inspect deadlocks
+      responses:
+        '200':
+          description: Deadlock graph
+  /admin/locks/resolve:
+    post:
+      summary: Resolve deadlocks
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                strategy:
+                  type: string
+      responses:
+        '200':
+          description: Deadlocks resolved
+  /queue/enqueue:
+    post:
+      summary: Enqueue an item
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueueItem'
+      responses:
+        '200':
+          description: Item enqueued
+  /queue/replicate:
+    post:
+      summary: Replica endpoint for queue items
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Replica accepted
+  /queue/dequeue:
+    post:
+      summary: Dequeue an item
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Item dequeued
+        '404':
+          description: Queue empty
+  /queue/status:
+    get:
+      summary: Inspect queue state
+      responses:
+        '200':
+          description: Queue snapshot
+  /cache/set:
+    post:
+      summary: Write to cache
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CacheSetRequest'
+      responses:
+        '200':
+          description: Cache updated
+  /cache/get:
+    get:
+      summary: Read from cache
+      parameters:
+        - name: key
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Cache hit
+        '404':
+          description: Cache miss
+  /cache/delete:
+    post:
+      summary: Delete cache entry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                key:
+                  type: string
+      responses:
+        '200':
+          description: Entry deleted
+  /cache/invalidate:
+    post:
+      summary: Invalidate replicated cache entry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Invalidation applied
+  /cache/status:
+    get:
+      summary: Inspect cache state
+      responses:
+        '200':
+          description: Cache snapshot
+components:
+  schemas:
+    LockRequest:
+      type: object
+      required:
+        - resource
+      properties:
+        resource:
+          type: string
+        node_id:
+          type: string
+    QueueItem:
+      type: object
+      required:
+        - item
+      properties:
+        item:
+          oneOf:
+            - type: string
+            - type: number
+            - type: object
+            - type: array
+            - type: boolean
+            - type: 'null'
+        node_id:
+          type: string
+    CacheSetRequest:
+      type: object
+      required:
+        - key
+        - value
+      properties:
+        key:
+          type: string
+        value:
+          oneOf:
+            - type: string
+            - type: number
+            - type: object
+            - type: array
+            - type: boolean
+            - type: 'null'
+        node_id:
+          type: string

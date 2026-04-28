@@ -1,12 +1,14 @@
 # Distributed Sync System
 
-Implementasi sistem sinkronisasi terdistribusi menggunakan Python dengan Raft consensus dan distributed lock/queue management.
+Implementasi sistem sinkronisasi terdistribusi menggunakan Python dengan konsensus Raft serta pengelolaan lock, queue, dan cache lintas node.
 
 ## Features
-- Raft Leader Election
-- Distributed Lock Manager
-- Distributed Queue System
-- Cache Coherence
+- Pemilihan pemimpin (leader election) berbasis Raft.
+- Pengelola lock terdistribusi (shared dan exclusive lock).
+- Sistem antrean (queue) terdistribusi dengan penyimpanan SQLite.
+- Koherensi cache dengan invalidasi antar node.
+- Dokumentasi API OpenAPI/Swagger.
+- Penerapan multi-node berbasis Docker.
 
 ## Quick Start
 
@@ -20,11 +22,9 @@ pip install -r requirements.txt
 
 ### 1b. Environment Template
 
-File `.env.example` disediakan sebagai template konfigurasi proyek. Kalau nanti ingin memakai environment variable, cukup salin file itu menjadi `.env` lalu sesuaikan nilainya. Untuk demo saat ini, project tetap bisa dijalankan langsung dengan argumen CLI seperti di bawah.
+File `.env.example` disediakan sebagai template konfigurasi. Jika ingin memakai environment variable, salin file tersebut menjadi `.env`, lalu sesuaikan nilainya.
 
-### 1c. Jalankan dengan `.env`
-
-Kalau mau pakai file environment, copy template ini lalu isi nilainya:
+### 1c. Run with `.env`
 
 ```bash
 copy .env.example .env
@@ -40,13 +40,13 @@ PORT=8001
 PEERS=localhost:8002,localhost:8003
 ```
 
-Lalu jalankan:
+Jalankan node:
 
 ```bash
 python main.py --env-file .env
 ```
 
-Kalau kamu mau menjalankan 3 node pakai `.env`, buat 3 file terpisah misalnya `.env.node1`, `.env.node2`, dan `.env.node3`, lalu jalankan:
+Jika ingin menjalankan 3 node dengan file `.env` terpisah:
 
 ```bash
 python main.py --env-file .env.node1
@@ -56,7 +56,7 @@ python main.py --env-file .env.node3
 
 Argumen CLI tetap bisa dipakai dan akan menimpa nilai dari `.env`.
 
-### 2. Jalankan 3 Node
+### 2. Run 3 Nodes Manually
 
 Terminal 1:
 ```bash
@@ -73,16 +73,21 @@ Terminal 3:
 python main.py --id node3 --port 8003 --peers localhost:8001 localhost:8002
 ```
 
-Tunggu hingga salah satu menampilkan `[nodeX] Became LEADER`.
+Tunggu sampai salah satu node menampilkan log `Became LEADER`.
 
-### 3. Demo Manual End-to-End (Start to Finish)
+### 3. Manual End-to-End Demo
 
-Langkah ini bisa langsung dipakai saat presentasi:
+Urutan demo yang direkomendasikan saat presentasi:
 
 1. Aktifkan virtual environment dan install dependency.
 2. Jalankan 3 node di 3 terminal terpisah.
-3. Tunggu hingga ada leader terpilih (`Became LEADER`).
-4. Uji Lock:
+3. Pastikan leader sudah terpilih (`Became LEADER`).
+4. Uji lock.
+5. Uji queue.
+6. Uji cache coherence.
+7. Hentikan semua node dengan `Ctrl + C`.
+
+Uji lock:
 
 ```powershell
 curl.exe -X POST http://localhost:8001/lock/acquire -H "Content-Type: application/json" -d '{\"resource\":\"demo-lock\",\"node_id\":\"node1\"}'
@@ -90,7 +95,7 @@ curl.exe -X GET http://localhost:8003/lock/status
 curl.exe -X POST http://localhost:8001/lock/release -H "Content-Type: application/json" -d '{\"resource\":\"demo-lock\",\"node_id\":\"node1\"}'
 ```
 
-5. Uji Queue:
+Uji queue:
 
 ```powershell
 curl.exe -X POST http://localhost:8002/queue/enqueue -H "Content-Type: application/json" -d '{\"item\":\"job-1\",\"node_id\":\"node1\"}'
@@ -98,7 +103,7 @@ curl.exe -X GET http://localhost:8001/queue/status
 curl.exe -X POST http://localhost:8002/queue/dequeue -H "Content-Type: application/json" -d '{\"node_id\":\"node1\"}'
 ```
 
-6. Uji Cache Coherence:
+Uji cache coherence:
 
 ```powershell
 curl.exe -X POST http://localhost:8001/cache/set -H "Content-Type: application/json" -d '{\"key\":\"user:1\",\"value\":{\"name\":\"naufal\"},\"node_id\":\"node1\"}'
@@ -107,17 +112,17 @@ curl.exe -X GET http://localhost:8003/cache/status
 curl.exe -X POST http://localhost:8001/cache/delete -H "Content-Type: application/json" -d '{\"key\":\"user:1\",\"node_id\":\"node1\"}'
 ```
 
-7. Hentikan semua node dengan `Ctrl + C` di masing-masing terminal.
+### 4. Run with Docker
 
-### 4. Jalankan dengan Docker
-
-Kalau kamu mau demo tanpa buka 3 terminal Python manual, pakai Docker Compose:
+Untuk demo tanpa membuka 3 terminal manual:
 
 ```bash
 docker compose up --build
 ```
 
-Setelah container jalan, kamu bisa akses endpoint yang sama seperti demo manual. Contoh:
+Setelah container berjalan, endpoint bisa dipakai seperti demo manual.
+
+Contoh:
 
 ```powershell
 curl.exe -X POST http://localhost:8001/lock/acquire -H "Content-Type: application/json" -d '{\"resource\":\"docker-lock\",\"node_id\":\"node1\"}'
@@ -125,59 +130,57 @@ curl.exe -X POST http://localhost:8002/queue/enqueue -H "Content-Type: applicati
 curl.exe -X POST http://localhost:8001/cache/set -H "Content-Type: application/json" -d '{\"key\":\"docker:key\",\"value\":{\"active\":true},\"node_id\":\"node1\"}'
 ```
 
-Kalau mau stop container:
+Stop container:
 
 ```bash
 docker compose down
 ```
 
-### 5. Feature B - Geo-Distributed Demo
+### 5. Feature B Bonus: Geo-Distributed Demo
 
-Bonus ini sekarang bisa didemokan lewat Docker Compose dengan region simulated latency.
+Bonus ini bisa didemokan lewat Docker Compose dengan simulasi latency antar region.
 
-Yang dipakai:
+Variabel yang dipakai:
 
-- `REGION` untuk region node saat ini
-- `PEER_REGIONS` untuk memetakan node peer ke region
-- `LATENCY_PROFILE` untuk mensimulasikan latency antar region
+- `REGION`: region node saat ini.
+- `PEER_REGIONS`: pemetaan peer ke region.
+- `LATENCY_PROFILE`: profil latency antar region.
 
-Contoh demo:
+Menjalankan demo:
 
 ```bash
 docker compose up --build
 ```
 
-Lalu lakukan set cache di leader, misalnya:
+Lakukan update cache di leader:
 
 ```powershell
 curl.exe -X POST http://localhost:8001/cache/set -H "Content-Type: application/json" -d '{\"key\":\"geo:key\",\"value\":{\"region\":\"asia\"},\"node_id\":\"node1\"}'
 ```
 
-Setelah beberapa saat, cache itu akan tereplikasi ke node lain sesuai latency profile. Kamu bisa cek dari follower:
+Cek propagasi ke follower:
 
 ```powershell
 curl.exe -X GET http://localhost:8002/cache/status
 curl.exe -X GET http://localhost:8003/cache/status
 ```
 
-Kalau mau menjelaskan di presentasi, poin utamanya adalah:
+Poin presentasi yang bisa ditekankan:
 
-1. Node bisa dideploy di beberapa region secara simulasi.
-2. Routing replikasi cache mengikuti latency profile.
-3. Data akhirnya konsisten di node lain lewat eventual consistency.
-
----
+1. Node dapat disimulasikan berada di beberapa region.
+2. Jalur replikasi mengikuti profil latency.
+3. Data menjadi konsisten pada akhirnya (eventual consistency).
 
 ## API Endpoints
 
 ### Distributed Lock Manager
 
-#### Acquire Lock
+#### Acquire Lock (`acquire`)
 ```powershell
 curl.exe -X POST http://localhost:8001/lock/acquire -H "Content-Type: application/json" -d '{\"resource\":\"file1\",\"node_id\":\"node1\"}'
 ```
 
-Response (jika berhasil):
+Contoh respons sukses:
 ```json
 {
   "status": "ok",
@@ -190,7 +193,7 @@ Response (jika berhasil):
 }
 ```
 
-#### Release Lock
+#### Release Lock (`release`)
 ```powershell
 curl.exe -X POST http://localhost:8001/lock/release -H "Content-Type: application/json" -d '{\"resource\":\"file1\",\"node_id\":\"node1\"}'
 ```
@@ -200,16 +203,14 @@ curl.exe -X POST http://localhost:8001/lock/release -H "Content-Type: applicatio
 curl.exe -X GET http://localhost:8001/lock/status
 ```
 
----
-
 ### Distributed Queue System
 
-#### Enqueue Item
+#### Enqueue Item (`enqueue`)
 ```powershell
 curl.exe -X POST http://localhost:8002/queue/enqueue -H "Content-Type: application/json" -d '{\"item\":\"job-1\",\"node_id\":\"node1\"}'
 ```
 
-Response:
+Contoh respons:
 ```json
 {
   "status": "ok",
@@ -223,7 +224,7 @@ Response:
 }
 ```
 
-#### Dequeue Item
+#### Dequeue Item (`dequeue`)
 ```powershell
 curl.exe -X POST http://localhost:8002/queue/dequeue -H "Content-Type: application/json" -d '{\"node_id\":\"node1\"}'
 ```
@@ -233,16 +234,14 @@ curl.exe -X POST http://localhost:8002/queue/dequeue -H "Content-Type: applicati
 curl.exe -X GET http://localhost:8002/queue/status
 ```
 
----
-
 ### Cache Coherence
 
-#### Set Cache Value
+#### Set Cache Value (`set`)
 ```powershell
 curl.exe -X POST http://localhost:8001/cache/set -H "Content-Type: application/json" -d '{\"key\":\"user:1\",\"value\":{\"name\":\"naufal\"},\"node_id\":\"node1\"}'
 ```
 
-Response:
+Contoh respons:
 ```json
 {
   "status": "ok",
@@ -257,12 +256,12 @@ Response:
 }
 ```
 
-#### Get Cache Value
+#### Get Cache Value (`get`)
 ```powershell
 curl.exe -X GET "http://localhost:8001/cache/get?key=user:1"
 ```
 
-#### Delete Cache Value
+#### Delete Cache Value (`delete`)
 ```powershell
 curl.exe -X POST http://localhost:8001/cache/delete -H "Content-Type: application/json" -d '{\"key\":\"user:1\",\"node_id\":\"node1\"}'
 ```
@@ -272,90 +271,122 @@ curl.exe -X POST http://localhost:8001/cache/delete -H "Content-Type: applicatio
 curl.exe -X GET http://localhost:8001/cache/status
 ```
 
----
-
 ## Important Notes
 
 ### PowerShell Command Format
-Untuk curl di PowerShell, gunakan format dengan escaped quotes:
+
+Untuk `curl` di PowerShell, gunakan format dengan tanda kutip yang di-escape:
+
 ```powershell
 curl.exe -X POST http://localhost:PORT/endpoint -H "Content-Type: application/json" -d '{\"key\":\"value\"}'
 ```
 
 ### Follower Forwarding
-Jika kamu kirim request ke follower node, request akan otomatis diteruskan ke leader:
+
+Jika request write dikirim ke follower, node follower akan meneruskan request ke leader secara otomatis.
+
 ```powershell
-# Ini ke node1 (follower)
+# Request is sent to node1 (follower)
 curl.exe -X POST http://localhost:8001/lock/acquire -H "Content-Type: application/json" -d '{\"resource\":\"file1\",\"node_id\":\"node1\"}'
 
-# Akan diteruskan ke leader otomatis
+# Follower forwards the request to the active leader
 ```
 
-### Raft State
-Setiap response mencakup state leader terkini:
-- `leader_id`: ID leader yang aktif saat ini
-- `term`: Term saat ini
-- `state`: State node (leader/follower/candidate)
+### Raft State in Responses
 
----
+Setiap respons menyertakan kondisi cluster saat itu:
 
-## Test
+- `leader_id`: ID leader aktif.
+- `term`: term Raft saat ini.
+- `state`: peran node yang melayani request (`leader`, `follower`, atau `candidate`).
 
-Jalankan unit test:
+Penjelasan tambahan:
+- Jika `state` bernilai `follower`, operasi tulis biasanya akan diteruskan ke leader.
+- Jika `leader_id` kosong, cluster masih dalam proses pemilihan leader.
+
+## Testing
+
+Menjalankan unit test:
+
 ```bash
 python -m unittest discover -s tests/unit -p "test_*.py"
 ```
 
----
+Menjalankan benchmark lokal:
 
-## Architecture
-
+```bash
+python benchmarks/load_test_scenarios.py
 ```
+
+## Documentation
+
+OpenAPI tersedia di `/openapi.json`, dan Swagger UI tersedia di `/docs`.
+
+Dokumentasi tambahan:
+- [Ikhtisar Arsitektur](docs/architecture.md)
+- [Panduan Penerapan](docs/deployment_guide.md)
+- [Laporan Performa](docs/performance_report.md)
+- [Ringkasan Cakupan Rubrik](docs/rubric_coverage.md)
+
+## Architecture Summary
+
+```text
 Node (leader)
-├── Raft Consensus
-│   ├── Leader Election
-│   ├── Heartbeat
-│   └── Vote Management
-├── Lock Manager
-│   ├── acquire_lock
-│   ├── release_lock
-│   └── list_locks
-├── Queue Manager
-│   ├── enqueue
-│   ├── dequeue
-│   └── list_queue
-├── Cache Manager
-│   ├── set
-│   ├── get
-│   ├── delete
-│   └── list_cache
-└── HTTP Server
-    ├── /message (Raft protocol)
-    ├── /lock/* (Lock endpoints)
-    ├── /queue/* (Queue endpoints)
-    ├── /cache/* (Cache endpoints)
-    └── /health (Health check)
+|- Konsensus Raft
+|  |- Pemilihan leader
+|  |- Heartbeat
+|  `- Manajemen vote
+|- Lock Manager
+|  |- acquire_lock
+|  |- release_lock
+|  `- list_locks
+|- Queue Manager
+|  |- enqueue
+|  |- dequeue
+|  `- list_queue
+|- Cache Manager
+|  |- set
+|  |- get
+|  |- delete
+|  `- list_cache
+`- Server HTTP
+   |- /message (protokol Raft)
+   |- /lock/* (endpoint lock)
+   |- /queue/* (endpoint queue)
+   |- /cache/* (endpoint cache)
+   |- /openapi.json (spesifikasi OpenAPI)
+   |- /docs (Swagger UI)
+   `- /health (health check)
 ```
-
----
 
 ## Development
 
-Struktur project:
-```
+Struktur proyek:
+
+```text
 src/
-├── consensus/
-│   └── raft.py          # Raft consensus implementation
-├── nodes/
-│   ├── base_node.py     # Node HTTP server & request handling
-│   ├── cache_manager.py # Distributed cache implementation
-│   ├── lock_manager.py  # Distributed lock implementation
-│   └── queue_manager.py # Distributed queue implementation
-└── communication/
-    └── message_passing.py
+|- consensus/
+|  `- raft.py          # implementasi konsensus Raft
+|- nodes/
+|  |- base_node.py     # server HTTP node dan penanganan request
+|  |- cache_manager.py # implementasi cache terdistribusi
+|  |- lock_manager.py  # implementasi lock terdistribusi
+|  `- queue_manager.py # implementasi queue terdistribusi
+`- communication/
+   `- message_passing.py
+docs/
+|- architecture.md
+|- api_spec.yaml
+`- deployment_guide.md
 tests/unit/
-├── test_lock_manager.py
-├── test_queue_manager.py
-└── test_cache_manager.py
-main.py                  # Entry point
+|- test_lock_manager.py
+|- test_queue_manager.py
+`- test_cache_manager.py
+main.py                  # titik masuk aplikasi
 ```
+
+Catatan runtime:
+- Folder `data/` dibuat otomatis saat persistence queue dijalankan.
+
+
+

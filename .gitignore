@@ -36,3 +36,6 @@ build/
 # Temporary files
 *.tmp
 *.swp
+
+# Runtime persistence
+data/

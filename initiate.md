@@ -1,123 +1,106 @@
 # Distributed Sync System
 
-Implementasi sistem sinkronisasi terdistribusi menggunakan Python (asyncio) sebagai bagian dari tugas Sistem Paralel dan Terdistribusi.
+Implementasi sistem sinkronisasi terdistribusi menggunakan Python (`asyncio`) sebagai bagian dari tugas Sistem Paralel dan Terdistribusi.
 
----
+## Project Initialization
 
-## 🚀 Setup Awal Project
+Langkah inisialisasi yang sudah dilakukan:
 
-Berikut langkah-langkah inisialisasi yang telah dilakukan:
+### 1. Create Repository
 
-### 1. Membuat Repository
+- Repositori dibuat dengan nama `distributed-sync-system`.
+- Struktur folder mengikuti kebutuhan tugas.
 
-* Repository dibuat dengan nama: `distributed-sync-system`
-* Struktur folder mengikuti spesifikasi tugas
+### 2. Setup Virtual Environment (Required)
 
----
-
-### 2. Setup Virtual Environment (WAJIB)
-
-Membuat virtual environment untuk isolasi dependency:
+Buat virtual environment untuk isolasi dependency:
 
 ```bash
 python -m venv .venv
 ```
 
-Aktivasi (Windows PowerShell):
+Aktivasi di Windows PowerShell:
 
 ```bash
 .\.venv\Scripts\activate
 ```
 
-Jika berhasil, terminal akan menampilkan:
+Jika berhasil, prompt terminal akan menampilkan prefix `(.venv)`.
 
-```bash
-(.venv)
-```
+### 3. Initial Dependency Installation
 
----
-
-### 3. Instalasi Dependency Awal
-
-Menggunakan library utama untuk komunikasi antar node:
+Library awal untuk komunikasi antar node:
 
 ```bash
 pip install aiohttp
 ```
 
----
+### 4. Generate `requirements.txt`
 
-### 4. Generate requirements.txt
-
-Menyimpan semua dependency:
+Simpan daftar dependency saat ini:
 
 ```bash
 pip freeze > requirements.txt
 ```
 
----
+### 5. Environment Validation
 
-### 5. Validasi Environment
-
-Memastikan Python yang digunakan berasal dari virtual environment:
+Pastikan interpreter Python berasal dari virtual environment:
 
 ```bash
 python -c "import sys; print(sys.executable)"
 ```
 
-Output harus mengarah ke:
+Output seharusnya mengarah ke path seperti:
 
-```
+```text
 ...\.venv\Scripts\python.exe
 ```
 
----
+## Project Structure
 
-## 🧱 Struktur Project
-
-```
+```text
 distributed-sync-system/
-├── src/
-├── tests/
-├── docker/
-├── docs/
-├── benchmarks/
-├── requirements.txt
-├── .env.example
-├── README.md
-└── main.py
+|- src/
+|- tests/
+|- docker/
+|- docs/
+|- benchmarks/
+|- requirements.txt
+|- .env.example
+|- README.md
+`- main.py
 ```
 
----
+## Current Progress
 
-## 🎯 Progress Saat Ini
+- Repositori dan struktur proyek sudah dibuat.
+- Virtual environment sudah aktif.
+- Dependency awal (`aiohttp`) sudah terpasang.
+- Komunikasi dasar antar node melalui HTTP sudah siap.
 
-✅ Repository & struktur project dibuat
-✅ Virtual environment aktif
-✅ Dependency awal (aiohttp) terinstall
-✅ Sistem komunikasi antar node (basic HTTP) siap
+## Next Steps
 
----
+- Implementasi message passing antar node.
+- Implementasi Raft (leader election).
+- Implementasi Distributed Lock Manager.
+- Implementasi Distributed Queue System.
+- Implementasi Cache Coherence.
 
-## 🔜 Next Step
+## Important Notes
 
-* Implementasi komunikasi antar node (message passing)
-* Implementasi Raft (leader election)
-* Distributed Lock Manager
-* Distributed Queue System
-* Cache Coherence
+- Selalu aktifkan `.venv` sebelum menjalankan proyek.
+- Hindari instalasi package di global environment.
+- Perbarui `requirements.txt` setiap ada dependency baru.
 
----
+## Document Notes
 
-## ⚠️ Catatan Penting
+File ini berfungsi sebagai catatan inisialisasi awal proyek. Untuk alur eksekusi terbaru, endpoint, dan deployment, gunakan `README.md` serta dokumen di folder `docs/`.
 
-* Selalu aktifkan `.venv` sebelum menjalankan project
-* Jangan install package di global environment
-* Update `requirements.txt` setiap menambah dependency
+## Author
 
----
+- Nama: [Isi Nama Kamu]
+- NIM: [Isi NIM]
 
-## 🧑‍💻 Author
 
-* Nama: [Isi Nama Kamu]
-* NIM: [Isi NIM]
+
