@@ -2,11 +2,9 @@ import asyncio
 import re
 from aiohttp import web
 from src.consensus.raft import RaftNode
+from src.nodes.cache_manager import DistributedCacheManager
 from src.nodes.lock_manager import DistributedLockManager
-<<<<<<< HEAD
 from src.nodes.queue_manager import DistributedQueueManager
-=======
->>>>>>> cbb638edcfac6f4708b37efd8ca3123e186d3c03
 
 
 class BaseNode:
@@ -22,20 +20,19 @@ class BaseNode:
             web.post('/lock/acquire', self.acquire_lock),
             web.post('/lock/release', self.release_lock),
             web.get('/lock/status', self.lock_status),
-<<<<<<< HEAD
             web.post('/queue/enqueue', self.enqueue_queue),
             web.post('/queue/dequeue', self.dequeue_queue),
             web.get('/queue/status', self.queue_status),
-=======
->>>>>>> cbb638edcfac6f4708b37efd8ca3123e186d3c03
+            web.post('/cache/set', self.cache_set),
+            web.get('/cache/get', self.cache_get),
+            web.post('/cache/delete', self.cache_delete),
+            web.get('/cache/status', self.cache_status),
             web.get('/health', self.health_check)
         ])
         self.raft = RaftNode(self.node_id, self.peers, self.send_message)
+        self.cache_manager = DistributedCacheManager()
         self.lock_manager = DistributedLockManager()
-<<<<<<< HEAD
         self.queue_manager = DistributedQueueManager()
-=======
->>>>>>> cbb638edcfac6f4708b37efd8ca3123e186d3c03
         
     async def start_background_tasks(self, app):
         app.loop.create_task(self.raft.start())
@@ -54,6 +51,17 @@ class BaseNode:
             except Exception as e:
                 print(f"[{self.node_id}] Error sending to {peer}: {e}")
 
+    async def get_json(self, peer, path, params=None):
+        import aiohttp
+        url = f"http://{peer}{path}"
+
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(url, params=params) as resp:
+                    return await resp.json()
+            except Exception as e:
+                print(f"[{self.node_id}] Error getting from {peer}: {e}")
+
     def leader_address(self):
         leader_id = self.raft.leader_id
         if not leader_id:
@@ -63,11 +71,7 @@ class BaseNode:
         if not match:
             return None
 
-<<<<<<< HEAD
         return f"{self.host}:800{match.group(1)}"
-=======
-        return f"{self.host}:80{match.group(1)}"
->>>>>>> cbb638edcfac6f4708b37efd8ca3123e186d3c03
 
     def leader_state_payload(self):
         return {
@@ -76,15 +80,34 @@ class BaseNode:
             "state": self.raft.state,
         }
 
-<<<<<<< HEAD
+    async def forward_get_to_leader(self, path, params=None):
+        leader_address = self.leader_address()
+        if not leader_address:
+            return web.json_response({
+                "status": "error",
+                "message": "leader belum diketahui",
+                **self.leader_state_payload(),
+            }, status=503)
+
+        if leader_address == f"{self.host}:{self.port}":
+            return None
+
+        response = await self.get_json(leader_address, path, params=params)
+        if response is None:
+            return web.json_response({
+                "status": "error",
+                "message": "gagal terhubung ke leader",
+                **self.leader_state_payload(),
+            }, status=503)
+
+        return web.json_response(response, status=200 if response.get("status") != "miss" else 404)
+
     async def read_json_body(self, request):
         try:
             return await request.json(), None
         except Exception:
             return None, web.json_response({"status": "error", "message": "body harus JSON valid"}, status=400)
 
-=======
->>>>>>> cbb638edcfac6f4708b37efd8ca3123e186d3c03
     async def forward_to_leader(self, path, payload):
         leader_address = self.leader_address()
         if not leader_address:
@@ -108,14 +131,10 @@ class BaseNode:
         return web.json_response(response, status=200 if response.get("status") != "error" else 409)
 
     async def acquire_lock(self, request):
-<<<<<<< HEAD
         data, error_response = await self.read_json_body(request)
         if error_response is not None:
             return error_response
 
-=======
-        data = await request.json()
->>>>>>> cbb638edcfac6f4708b37efd8ca3123e186d3c03
         resource = data.get("resource")
         requester = data.get("node_id", self.node_id)
 
@@ -150,14 +169,10 @@ class BaseNode:
         }, status=409)
 
     async def release_lock(self, request):
-<<<<<<< HEAD
         data, error_response = await self.read_json_body(request)
         if error_response is not None:
             return error_response
 
-=======
-        data = await request.json()
->>>>>>> cbb638edcfac6f4708b37efd8ca3123e186d3c03
         resource = data.get("resource")
         requester = data.get("node_id", self.node_id)
 
@@ -193,12 +208,16 @@ class BaseNode:
         }, status=409)
 
     async def lock_status(self, request):
+        if self.raft.state != "leader":
+            forwarded = await self.forward_get_to_leader('/lock/status')
+            if forwarded is not None:
+                return forwarded
+
         return web.json_response({
             "status": "ok",
             "locks": self.lock_manager.list_locks(),
             **self.leader_state_payload(),
         })
-<<<<<<< HEAD
 
     async def enqueue_queue(self, request):
         data, error_response = await self.read_json_body(request)
@@ -271,10 +290,145 @@ class BaseNode:
         })
 
     async def queue_status(self, request):
+        if self.raft.state != "leader":
+            forwarded = await self.forward_get_to_leader('/queue/status')
+            if forwarded is not None:
+                return forwarded
+
         return web.json_response({
             "status": "ok",
             "queue": self.queue_manager.list_queue(),
             "queue_size": self.queue_manager.size(),
+            **self.leader_state_payload(),
+        })
+
+    async def cache_set(self, request):
+        data, error_response = await self.read_json_body(request)
+        if error_response is not None:
+            return error_response
+
+        key = data.get("key")
+        value = data.get("value")
+        requester = data.get("node_id", self.node_id)
+
+        if self.raft.state != "leader":
+            forwarded = await self.forward_to_leader('/cache/set', data)
+            if forwarded is not None:
+                return forwarded
+            return web.json_response({
+                "status": "error",
+                "message": "node ini belum leader",
+                **self.leader_state_payload(),
+            }, status=409)
+
+        if not key:
+            return web.json_response({"status": "error", "message": "key wajib diisi"}, status=400)
+
+        stored = self.cache_manager.set(key, value, requester)
+        if stored:
+            entry = self.cache_manager.get(key)
+            return web.json_response({
+                "status": "ok",
+                "action": "set",
+                "key": key,
+                "value": entry["value"],
+                "version": entry["version"],
+                "updated_by": entry["updated_by"],
+                **self.leader_state_payload(),
+            })
+
+        return web.json_response({"status": "error", "message": "gagal menyimpan cache"}, status=500)
+
+    async def cache_get(self, request):
+        key = request.query.get("key")
+
+        if not key:
+            return web.json_response({"status": "error", "message": "key wajib diisi"}, status=400)
+
+        if self.raft.state != "leader":
+            leader_address = self.leader_address()
+            if not leader_address:
+                return web.json_response({
+                    "status": "error",
+                    "message": "leader belum diketahui",
+                    **self.leader_state_payload(),
+                }, status=503)
+
+            if leader_address != f"{self.host}:{self.port}":
+                response = await self.get_json(leader_address, '/cache/get', params={"key": key})
+                if response is None:
+                    return web.json_response({
+                        "status": "error",
+                        "message": "gagal terhubung ke leader",
+                        **self.leader_state_payload(),
+                    }, status=503)
+
+                return web.json_response(response, status=200 if response.get("status") != "miss" else 404)
+
+        entry = self.cache_manager.get(key)
+        if entry is None:
+            return web.json_response({
+                "status": "miss",
+                "key": key,
+                **self.leader_state_payload(),
+            }, status=404)
+
+        return web.json_response({
+            "status": "ok",
+            "action": "get",
+            "key": key,
+            "value": entry["value"],
+            "version": entry["version"],
+            "updated_by": entry["updated_by"],
+            **self.leader_state_payload(),
+        })
+
+    async def cache_delete(self, request):
+        data, error_response = await self.read_json_body(request)
+        if error_response is not None:
+            return error_response
+
+        key = data.get("key")
+        requester = data.get("node_id", self.node_id)
+
+        if self.raft.state != "leader":
+            forwarded = await self.forward_to_leader('/cache/delete', data)
+            if forwarded is not None:
+                return forwarded
+            return web.json_response({
+                "status": "error",
+                "message": "node ini belum leader",
+                **self.leader_state_payload(),
+            }, status=409)
+
+        if not key:
+            return web.json_response({"status": "error", "message": "key wajib diisi"}, status=400)
+
+        deleted = self.cache_manager.delete(key)
+        if deleted:
+            return web.json_response({
+                "status": "ok",
+                "action": "delete",
+                "key": key,
+                "requested_by": requester,
+                **self.leader_state_payload(),
+            })
+
+        return web.json_response({
+            "status": "miss",
+            "key": key,
+            **self.leader_state_payload(),
+        }, status=404)
+
+    async def cache_status(self, request):
+        if self.raft.state != "leader":
+            forwarded = await self.forward_get_to_leader('/cache/status')
+            if forwarded is not None:
+                return forwarded
+
+        return web.json_response({
+            "status": "ok",
+            "cache": self.cache_manager.list_cache(),
             **self.leader_state_payload(),
         })
             
@@ -283,11 +437,6 @@ class BaseNode:
         if error_response is not None:
             return error_response
 
-=======
-            
-    async def handle_message(self, request):
-        data = await request.json()
->>>>>>> cbb638edcfac6f4708b37efd8ca3123e186d3c03
         msg_type = data.get("type")
 
         if msg_type == "vote_request":

@@ -3,10 +3,10 @@
 Implementasi sistem sinkronisasi terdistribusi menggunakan Python dengan Raft consensus dan distributed lock/queue management.
 
 ## Features
-- ✅ Raft Leader Election
-- ✅ Distributed Lock Manager
-- ✅ Distributed Queue System
-- 🔄 Cache Coherence (upcoming)
+- Raft Leader Election
+- Distributed Lock Manager
+- Distributed Queue System
+- Cache Coherence
 
 ## Quick Start
 
@@ -40,6 +40,40 @@ python main.py --id node3 --port 8003 --peers localhost:8001 localhost:8002
 ```
 
 Tunggu hingga salah satu menampilkan `[nodeX] Became LEADER`.
+
+### 3. Demo Manual End-to-End (Start to Finish)
+
+Langkah ini bisa langsung dipakai saat presentasi:
+
+1. Aktifkan virtual environment dan install dependency.
+2. Jalankan 3 node di 3 terminal terpisah.
+3. Tunggu hingga ada leader terpilih (`Became LEADER`).
+4. Uji Lock:
+
+```powershell
+curl.exe -X POST http://localhost:8001/lock/acquire -H "Content-Type: application/json" -d '{\"resource\":\"demo-lock\",\"node_id\":\"node1\"}'
+curl.exe -X GET http://localhost:8003/lock/status
+curl.exe -X POST http://localhost:8001/lock/release -H "Content-Type: application/json" -d '{\"resource\":\"demo-lock\",\"node_id\":\"node1\"}'
+```
+
+5. Uji Queue:
+
+```powershell
+curl.exe -X POST http://localhost:8002/queue/enqueue -H "Content-Type: application/json" -d '{\"item\":\"job-1\",\"node_id\":\"node1\"}'
+curl.exe -X GET http://localhost:8001/queue/status
+curl.exe -X POST http://localhost:8002/queue/dequeue -H "Content-Type: application/json" -d '{\"node_id\":\"node1\"}'
+```
+
+6. Uji Cache Coherence:
+
+```powershell
+curl.exe -X POST http://localhost:8001/cache/set -H "Content-Type: application/json" -d '{\"key\":\"user:1\",\"value\":{\"name\":\"naufal\"},\"node_id\":\"node1\"}'
+curl.exe -X GET "http://localhost:8002/cache/get?key=user:1"
+curl.exe -X GET http://localhost:8003/cache/status
+curl.exe -X POST http://localhost:8001/cache/delete -H "Content-Type: application/json" -d '{\"key\":\"user:1\",\"node_id\":\"node1\"}'
+```
+
+7. Hentikan semua node dengan `Ctrl + C` di masing-masing terminal.
 
 ---
 
@@ -110,6 +144,45 @@ curl.exe -X GET http://localhost:8002/queue/status
 
 ---
 
+### Cache Coherence
+
+#### Set Cache Value
+```powershell
+curl.exe -X POST http://localhost:8001/cache/set -H "Content-Type: application/json" -d '{\"key\":\"user:1\",\"value\":{\"name\":\"naufal\"},\"node_id\":\"node1\"}'
+```
+
+Response:
+```json
+{
+  "status": "ok",
+  "action": "set",
+  "key": "user:1",
+  "value": {"name": "naufal"},
+  "version": 1,
+  "updated_by": "node1",
+  "leader_id": "node2",
+  "term": 1,
+  "state": "leader"
+}
+```
+
+#### Get Cache Value
+```powershell
+curl.exe -X GET "http://localhost:8001/cache/get?key=user:1"
+```
+
+#### Delete Cache Value
+```powershell
+curl.exe -X POST http://localhost:8001/cache/delete -H "Content-Type: application/json" -d '{\"key\":\"user:1\",\"node_id\":\"node1\"}'
+```
+
+#### Check Cache Status
+```powershell
+curl.exe -X GET http://localhost:8001/cache/status
+```
+
+---
+
 ## Important Notes
 
 ### PowerShell Command Format
@@ -160,10 +233,16 @@ Node (leader)
 │   ├── enqueue
 │   ├── dequeue
 │   └── list_queue
+├── Cache Manager
+│   ├── set
+│   ├── get
+│   ├── delete
+│   └── list_cache
 └── HTTP Server
     ├── /message (Raft protocol)
     ├── /lock/* (Lock endpoints)
     ├── /queue/* (Queue endpoints)
+    ├── /cache/* (Cache endpoints)
     └── /health (Health check)
 ```
 
@@ -178,12 +257,14 @@ src/
 │   └── raft.py          # Raft consensus implementation
 ├── nodes/
 │   ├── base_node.py     # Node HTTP server & request handling
+│   ├── cache_manager.py # Distributed cache implementation
 │   ├── lock_manager.py  # Distributed lock implementation
 │   └── queue_manager.py # Distributed queue implementation
 └── communication/
     └── message_passing.py
 tests/unit/
 ├── test_lock_manager.py
-└── test_queue_manager.py
+├── test_queue_manager.py
+└── test_cache_manager.py
 main.py                  # Entry point
 ```
