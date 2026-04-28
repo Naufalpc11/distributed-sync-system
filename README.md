@@ -22,6 +22,40 @@ pip install -r requirements.txt
 
 File `.env.example` disediakan sebagai template konfigurasi proyek. Kalau nanti ingin memakai environment variable, cukup salin file itu menjadi `.env` lalu sesuaikan nilainya. Untuk demo saat ini, project tetap bisa dijalankan langsung dengan argumen CLI seperti di bawah.
 
+### 1c. Jalankan dengan `.env`
+
+Kalau mau pakai file environment, copy template ini lalu isi nilainya:
+
+```bash
+copy .env.example .env
+```
+
+Contoh isi `.env`:
+
+```env
+NODE_ID=node1
+HOST=localhost
+ADVERTISE_HOST=localhost
+PORT=8001
+PEERS=localhost:8002,localhost:8003
+```
+
+Lalu jalankan:
+
+```bash
+python main.py --env-file .env
+```
+
+Kalau kamu mau menjalankan 3 node pakai `.env`, buat 3 file terpisah misalnya `.env.node1`, `.env.node2`, dan `.env.node3`, lalu jalankan:
+
+```bash
+python main.py --env-file .env.node1
+python main.py --env-file .env.node2
+python main.py --env-file .env.node3
+```
+
+Argumen CLI tetap bisa dipakai dan akan menimpa nilai dari `.env`.
+
 ### 2. Jalankan 3 Node
 
 Terminal 1:
