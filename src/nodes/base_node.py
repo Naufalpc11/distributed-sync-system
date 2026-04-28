@@ -353,11 +353,28 @@ class BaseNode:
         if not leader_id:
             return None
 
+        if leader_id == self.node_id:
+            return f"{self.advertise_host}:{self.port}"
+
+        # Prefer explicit peer host match (works for docker service names).
+        for peer in self.peers:
+            host, _, _ = peer.partition(":")
+            if host == leader_id:
+                return peer
+
         match = re.search(r"(\d+)$", leader_id)
         if not match:
             return None
 
-        return f"{self.advertise_host}:800{match.group(1)}"
+        expected_port = f"800{match.group(1)}"
+
+        # Fallback: infer leader by conventional port mapping (works for localhost peers).
+        for peer in self.peers:
+            _, _, port = peer.rpartition(":")
+            if port == expected_port:
+                return peer
+
+        return f"localhost:{expected_port}"
 
     def leader_state_payload(self):
         return {

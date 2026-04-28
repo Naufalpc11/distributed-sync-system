@@ -48,11 +48,44 @@ python main.py --env-file .env
 
 Jika ingin menjalankan 3 node dengan file `.env` terpisah:
 
+`.env.node1`
+```env
+NODE_ID=node1
+HOST=localhost
+ADVERTISE_HOST=localhost
+PORT=8001
+PEERS=localhost:8002,localhost:8003
+```
+
+`.env.node2`
+```env
+NODE_ID=node2
+HOST=localhost
+ADVERTISE_HOST=localhost
+PORT=8002
+PEERS=localhost:8001,localhost:8003
+```
+
+`.env.node3`
+```env
+NODE_ID=node3
+HOST=localhost
+ADVERTISE_HOST=localhost
+PORT=8003
+PEERS=localhost:8001,localhost:8002
+```
+
+Jalankan masing-masing di terminal terpisah:
+
 ```bash
 python main.py --env-file .env.node1
 python main.py --env-file .env.node2
 python main.py --env-file .env.node3
 ```
+
+Catatan penting:
+- Jika file `.env.nodeX` tidak ada atau tidak berisi `PORT`, aplikasi akan fallback ke default port `8000` dan bisa memicu error bind `WinError 10048`.
+- Hindari menjalankan beberapa node dari terminal yang sama tanpa memisahkan prosesnya.
 
 Argumen CLI tetap bisa dipakai dan akan menimpa nilai dari `.env`.
 
@@ -116,8 +149,17 @@ curl.exe -X POST http://localhost:8001/cache/delete -H "Content-Type: applicatio
 
 Untuk demo tanpa membuka 3 terminal manual:
 
+1. Pastikan tidak ada node lokal yang sedang berjalan di port `8001-8003`.
+2. Jalankan:
+
 ```bash
 docker compose up --build
+```
+
+3. Cek status container:
+
+```bash
+docker compose ps
 ```
 
 Setelah container berjalan, endpoint bisa dipakai seperti demo manual.

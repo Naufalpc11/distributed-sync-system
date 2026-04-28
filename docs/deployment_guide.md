@@ -30,7 +30,11 @@ Penjelasan singkat:
 - `PEERS` berisi daftar node lain dalam cluster.
 - `LATENCY_PROFILE` dipakai saat simulasi multi-region.
 
+Untuk menjalankan 3 node via file `.env` terpisah, pastikan setiap node memiliki `PORT` unik (misalnya `8001`, `8002`, `8003`). Jika `PORT` tidak diset, aplikasi fallback ke `8000` dan bisa menyebabkan bentrok port.
+
 ## Docker Deployment
+Sebelum menjalankan Docker, pastikan tidak ada proses lokal lain yang memakai port `8001-8003`.
+
 Jalankan seluruh stack:
 
 ```bash
