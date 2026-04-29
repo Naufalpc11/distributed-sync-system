@@ -2,11 +2,17 @@ import asyncio
 import random
 import time
 
+from src.communication.failure_detector import FailureDetector
+
 class RaftNode:
-    def __init__(self, node_id, peers, send_func):
+    def __init__(self, node_id, peers, send_func, failure_detector=None):
         self.node_id = node_id
         self.peers = peers
         self.send = send_func
+        self.failure_detector = failure_detector or FailureDetector()
+
+        for peer in self.peers:
+            self.failure_detector.register_peer(peer)
 
         self.state = "follower"
         self.term = 0
@@ -90,19 +96,27 @@ class RaftNode:
         if self.votes > (len(self.peers) + 1) // 2:
             self.state = "leader"
             self.leader_id = self.node_id
+            if hasattr(self.failure_detector, "record_leader_change"):
+                self.failure_detector.record_leader_change(self.leader_id)
             print(f"[{self.node_id}] Became LEADER")
 
     async def send_heartbeat(self):
         for peer in self.peers:
-            await self.send(peer, {
+            response = await self.send(peer, {
                 "type": "heartbeat",
                 "leader_id": self.node_id,
                 "term": self.term
             })
 
+            if response is None:
+                self.failure_detector.mark_failed(peer)
+            else:
+                self.failure_detector.record_contact(peer)
+
     async def handle_heartbeat(self, msg):
         self.leader_id = msg["leader_id"]
         self.last_heartbeat = time.time()
+        self.failure_detector.record_heartbeat(msg["leader_id"])
 
         if msg["term"] >= self.term:
             self.state = "follower"

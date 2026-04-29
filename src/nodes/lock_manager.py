@@ -1,3 +1,6 @@
+from aiohttp import web
+
+
 class DistributedLockManager:
     def __init__(self):
         # resource -> owner node_id
@@ -249,3 +252,131 @@ class DistributedLockManager:
             victims.append((victim, released))
 
         return victims
+
+
+class LockRoutesMixin:
+    async def acquire_lock(self, request):
+        data, error_response = await self.read_json_body(request)
+        if error_response is not None:
+            return error_response
+
+        resource = data.get("resource")
+        requester = data.get("node_id", self.node_id)
+
+        if self.raft.state != "leader":
+            forwarded = await self.forward_to_leader('/lock/acquire', data)
+            if forwarded is not None:
+                return forwarded
+            return web.json_response({
+                "status": "error",
+                "message": "node ini belum leader",
+                **self.leader_state_payload(),
+            }, status=409)
+
+        if not resource:
+            return web.json_response({"status": "error", "message": "resource wajib diisi"}, status=400)
+
+        granted = self.lock_manager.acquire_lock(resource, requester)
+        if granted:
+            return web.json_response({
+                "status": "ok",
+                "action": "acquire",
+                "resource": resource,
+                "owner": requester,
+                **self.leader_state_payload(),
+            })
+
+        return web.json_response({
+            "status": "locked",
+            "resource": resource,
+            "owner": self.lock_manager.get_owner(resource),
+            **self.leader_state_payload(),
+        }, status=409)
+
+    async def release_lock(self, request):
+        data, error_response = await self.read_json_body(request)
+        if error_response is not None:
+            return error_response
+
+        resource = data.get("resource")
+        requester = data.get("node_id", self.node_id)
+
+        if self.raft.state != "leader":
+            forwarded = await self.forward_to_leader('/lock/release', data)
+            if forwarded is not None:
+                return forwarded
+            return web.json_response({
+                "status": "error",
+                "message": "node ini belum leader",
+                **self.leader_state_payload(),
+            }, status=409)
+
+        if not resource:
+            return web.json_response({"status": "error", "message": "resource wajib diisi"}, status=400)
+
+        released = self.lock_manager.release_lock(resource, requester)
+        if released:
+            return web.json_response({
+                "status": "ok",
+                "action": "release",
+                "resource": resource,
+                "owner": requester,
+                **self.leader_state_payload(),
+            })
+
+        return web.json_response({
+            "status": "error",
+            "message": "lock tidak dimiliki node ini atau belum ada",
+            "resource": resource,
+            "owner": self.lock_manager.get_owner(resource),
+            **self.leader_state_payload(),
+        }, status=409)
+
+    async def lock_status(self, request):
+        if self.raft.state != "leader":
+            forwarded = await self.forward_get_to_leader('/lock/status')
+            if forwarded is not None:
+                return forwarded
+
+        return web.json_response({
+            "status": "ok",
+            "locks": {
+                k: (v["owners"][0] if v.get("mode") == "exclusive" and v.get("owners") else v.get("owners"))
+                for k, v in self.lock_manager.list_locks().items()
+            },
+            **self.leader_state_payload(),
+        })
+
+    async def admin_deadlocks(self, request):
+        if self.raft.state != "leader":
+            forwarded = await self.forward_get_to_leader('/admin/locks/deadlocks')
+            if forwarded is not None:
+                return forwarded
+
+        cycles = self.lock_manager.detect_deadlocks()
+        return web.json_response({
+            "status": "ok",
+            "deadlocks": cycles,
+            "waiters": self.lock_manager.list_waiters(),
+            "locks": self.lock_manager.list_locks(),
+            **self.leader_state_payload(),
+        })
+
+    async def admin_resolve_deadlocks(self, request):
+        data, error_response = await self.read_json_body(request)
+        if error_response is not None:
+            return error_response
+
+        if self.raft.state != "leader":
+            forwarded = await self.forward_to_leader('/admin/locks/resolve', data)
+            if forwarded is not None:
+                return forwarded
+            return web.json_response({"status": "error", "message": "node ini belum leader", **self.leader_state_payload()}, status=409)
+
+        strategy = data.get("strategy", "youngest")
+        victims = self.lock_manager.resolve_deadlocks(strategy=strategy)
+        return web.json_response({
+            "status": "ok",
+            "resolved": victims,
+            **self.leader_state_payload(),
+        })

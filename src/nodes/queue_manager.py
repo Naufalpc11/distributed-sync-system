@@ -4,6 +4,9 @@ import sqlite3
 import threading
 from pathlib import Path
 from bisect import bisect
+import asyncio
+
+from aiohttp import web
 
 
 class ConsistentHashRing:
@@ -180,3 +183,147 @@ class DistributedQueueManager:
     def size(self):
         with self.lock:
             return len(self.queue)
+
+
+class QueueRoutesMixin:
+    async def enqueue_queue(self, request):
+        data, error_response = await self.read_json_body(request)
+        if error_response is not None:
+            return error_response
+
+        item = data.get("item")
+        requester = data.get("node_id", self.node_id)
+
+        if self.raft.state != "leader":
+            forwarded = await self.forward_to_leader('/queue/enqueue', data)
+            if forwarded is not None:
+                return forwarded
+            return web.json_response({
+                "status": "error",
+                "message": "node ini belum leader",
+                **self.leader_state_payload(),
+            }, status=409)
+
+        if item is None:
+            return web.json_response({"status": "error", "message": "item wajib diisi"}, status=400)
+
+        owner = self.queue_manager.owner_for(item)
+        if owner != self.advertise_addr:
+            payload = {"item": item, "node_id": requester}
+            response = await self.post_json(owner, "/queue/enqueue", payload)
+            if response is None:
+                accepted = self.queue_manager.force_enqueue(item, requester)
+                if accepted:
+                    return web.json_response({
+                        "status": "ok",
+                        "action": "enqueue",
+                        "item": item,
+                        "requested_by": requester,
+                        "queue_size": self.queue_manager.size(),
+                        **self.leader_state_payload(),
+                    })
+                return web.json_response({"status": "error", "message": "gagal enqueue"}, status=500)
+            return web.json_response(response)
+
+        accepted = self.queue_manager.enqueue(item, requester)
+        if accepted:
+            asyncio.create_task(self._replicate_enqueue_to_peers(item, requester))
+            return web.json_response({
+                "status": "ok",
+                "action": "enqueue",
+                "item": item,
+                "requested_by": requester,
+                "queue_size": self.queue_manager.size(),
+                **self.leader_state_payload(),
+            })
+
+        return web.json_response({"status": "error", "message": "gagal enqueue"}, status=500)
+
+    async def dequeue_queue(self, request):
+        data, error_response = await self.read_json_body(request)
+        if error_response is not None:
+            return error_response
+
+        requester = data.get("node_id", self.node_id)
+
+        if self.raft.state != "leader":
+            forwarded = await self.forward_to_leader('/queue/dequeue', data)
+            if forwarded is not None:
+                return forwarded
+            return web.json_response({
+                "status": "error",
+                "message": "node ini belum leader",
+                **self.leader_state_payload(),
+            }, status=409)
+
+        item = self.queue_manager.dequeue()
+        if item is None:
+            return web.json_response({
+                "status": "empty",
+                "message": "queue kosong",
+                "requested_by": requester,
+                **self.leader_state_payload(),
+            }, status=404)
+
+        return web.json_response({
+            "status": "ok",
+            "action": "dequeue",
+            "item": item["item"],
+            "enqueued_by": item["node_id"],
+            "requested_by": requester,
+            "queue_size": self.queue_manager.size(),
+            **self.leader_state_payload(),
+        })
+
+    async def queue_status(self, request):
+        if self.raft.state != "leader":
+            forwarded = await self.forward_get_to_leader('/queue/status')
+            if forwarded is not None:
+                return forwarded
+
+        return web.json_response({
+            "status": "ok",
+            "queue": self.queue_manager.list_queue(),
+            "queue_size": self.queue_manager.size(),
+            **self.leader_state_payload(),
+        })
+
+    async def _replicate_enqueue_to_peers(self, item, enqueued_by):
+        pending = self.queue_manager.list_pending()
+        if not pending:
+            return
+
+        msg = pending[-1]
+        msg_id = msg['id']
+        payload = {"id": msg_id, "item": msg['item'], "node_id": msg['node_id'], "origin": self.node_id}
+
+        async def replicate_to_peer(peer):
+            retries = 0
+            while retries < 5:
+                resp = await self.post_json(peer, '/queue/replicate', payload)
+                if resp and resp.get('status') == 'ok':
+                    self.queue_manager.mark_replica_ack(msg_id, peer)
+                    return
+                retries += 1
+                await asyncio.sleep(1 + retries)
+
+        for peer in self.ordered_peers_by_latency():
+            if peer == self.advertise_addr:
+                continue
+            asyncio.create_task(replicate_to_peer(peer))
+
+    async def queue_replicate(self, request):
+        data, err = await self.read_json_body(request)
+        if err is not None:
+            return err
+
+        msg_id = data.get('id')
+        item = data.get('item')
+        node_id = data.get('node_id')
+
+        if not msg_id or item is None:
+            return web.json_response({"status": "error", "message": "invalid payload"}, status=400)
+
+        self.queue_manager.force_enqueue(item, node_id)
+
+        return web.json_response({"status": "ok", "id": msg_id})

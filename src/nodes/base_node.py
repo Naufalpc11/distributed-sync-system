@@ -1,13 +1,14 @@
-import asyncio
 import re
 from aiohttp import web
+from src.communication.failure_detector import FailureDetector
 from src.consensus.raft import RaftNode
-from src.nodes.cache_manager import DistributedCacheManager
-from src.nodes.lock_manager import DistributedLockManager
-from src.nodes.queue_manager import DistributedQueueManager
+from src.nodes.cache_manager import CacheRoutesMixin, DistributedCacheManager
+from src.nodes.lock_manager import DistributedLockManager, LockRoutesMixin
+from src.nodes.queue_manager import DistributedQueueManager, QueueRoutesMixin
+from src.utils.metrics import MetricsCollector
 
 
-class BaseNode:
+class BaseNode(CacheRoutesMixin, QueueRoutesMixin, LockRoutesMixin):
     def __init__(self, node_id, bind_host, port, peers=None, advertise_host=None, region="local", peer_regions=None, latency_profile=None):
         self.node_id = node_id
         self.bind_host = bind_host
@@ -17,6 +18,10 @@ class BaseNode:
         self.region = region
         self.peer_regions = peer_regions or {}
         self.latency_profile = latency_profile or {}
+        self.failure_detector = FailureDetector(timeout_seconds=5.0, check_interval_seconds=1.0)
+        self.metrics = MetricsCollector()
+        for peer in self.peers:
+            self.failure_detector.register_peer(peer)
         
         self.app = web.Application()
         self.app.add_routes([
@@ -37,9 +42,10 @@ class BaseNode:
             web.post('/cache/delete', self.cache_delete),
             web.post('/cache/invalidate', self.cache_invalidate),
             web.get('/cache/status', self.cache_status),
+            web.get('/metrics', self.metrics_status),
             web.get('/health', self.health_check)
         ])
-        self.raft = RaftNode(self.node_id, self.peers, self.send_message)
+        self.raft = RaftNode(self.node_id, self.peers, self.send_message, self.failure_detector)
         self.cache_manager = DistributedCacheManager()
         self.lock_manager = DistributedLockManager()
         self.advertise_addr = f"{self.advertise_host}:{self.port}"
@@ -229,124 +235,46 @@ class BaseNode:
         
     async def start_background_tasks(self, app):
         app.loop.create_task(self.raft.start())
+        self.failure_detector.start_background_monitor()
         
     async def send_message(self, peer, message):
         return await self.post_json(peer, '/message', message)
 
+    @staticmethod
+    def _normalize_peer(peer):
+        # On some Windows setups, resolving "localhost" in async client calls can
+        # intermittently fail with network-name errors. Prefer loopback IPv4.
+        if peer.startswith("localhost:"):
+            return f"127.0.0.1:{peer.split(':', 1)[1]}"
+        return peer
+
     async def post_json(self, peer, path, message):
         import aiohttp
-        url = f"http://{peer}{path}"
+        target_peer = self._normalize_peer(peer)
+        url = f"http://{target_peer}{path}"
 
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.post(url, json=message) as resp:
+                    self.metrics.record_peer_request("post", True)
                     return await resp.json()
             except Exception as e:
-                print(f"[{self.node_id}] Error sending to {peer}: {e}")
+                self.metrics.record_peer_request("post", False)
+                print(f"[{self.node_id}] Error sending to {target_peer}: {e}")
 
     async def get_json(self, peer, path, params=None):
         import aiohttp
-        url = f"http://{peer}{path}"
+        target_peer = self._normalize_peer(peer)
+        url = f"http://{target_peer}{path}"
 
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.get(url, params=params) as resp:
+                    self.metrics.record_peer_request("get", True)
                     return await resp.json()
             except Exception as e:
-                print(f"[{self.node_id}] Error getting from {peer}: {e}")
-
-    def get_peer_region(self, peer):
-        return self.peer_regions.get(peer, self.region)
-
-    def get_peer_latency(self, peer):
-        peer_region = self.get_peer_region(peer)
-        if peer_region == self.region:
-            return 0
-
-        latency_key = f"{self.region}->{peer_region}"
-        reverse_key = f"{peer_region}->{self.region}"
-
-        if latency_key in self.latency_profile:
-            return int(self.latency_profile[latency_key])
-
-        if reverse_key in self.latency_profile:
-            return int(self.latency_profile[reverse_key])
-
-        return 50
-
-    def ordered_peers_by_latency(self):
-        return sorted(self.peers, key=self.get_peer_latency)
-
-    def should_replicate_cache(self):
-        return bool(self.peers)
-
-    async def replicate_cache_write(self, key, value, version, requester, source="leader"):
-        if not self.should_replicate_cache():
-            return
-
-        for peer in self.ordered_peers_by_latency():
-            delay_ms = self.get_peer_latency(peer)
-            task = asyncio.create_task(self._replicate_cache_to_peer(peer, key, value, version, requester, source, delay_ms))
-            self.replication_tasks.add(task)
-            task.add_done_callback(self.replication_tasks.discard)
-
-    async def _replicate_cache_to_peer(self, peer, key, value, version, requester, source, delay_ms):
-        await asyncio.sleep(delay_ms / 1000)
-
-        payload = {
-            "key": key,
-            "value": value,
-            "node_id": requester,
-            "version": version,
-            "replica": True,
-            "source": source,
-        }
-
-        await self.post_json(peer, "/cache/set", payload)
-
-    async def replicate_cache_delete(self, key, requester, source="leader"):
-        if not self.should_replicate_cache():
-            return
-
-        for peer in self.ordered_peers_by_latency():
-            delay_ms = self.get_peer_latency(peer)
-            task = asyncio.create_task(self._replicate_cache_delete_to_peer(peer, key, requester, source, delay_ms))
-            self.replication_tasks.add(task)
-            task.add_done_callback(self.replication_tasks.discard)
-
-    async def _replicate_cache_delete_to_peer(self, peer, key, requester, source, delay_ms):
-        await asyncio.sleep(delay_ms / 1000)
-
-        payload = {
-            "key": key,
-            "node_id": requester,
-            "replica": True,
-            "source": source,
-        }
-
-        await self.post_json(peer, "/cache/delete", payload)
-
-    async def replicate_cache_invalidate(self, key, requester, source="leader"):
-        if not self.should_replicate_cache():
-            return
-
-        for peer in self.ordered_peers_by_latency():
-            delay_ms = self.get_peer_latency(peer)
-            task = asyncio.create_task(self._replicate_cache_invalidate_to_peer(peer, key, requester, source, delay_ms))
-            self.replication_tasks.add(task)
-            task.add_done_callback(self.replication_tasks.discard)
-
-    async def _replicate_cache_invalidate_to_peer(self, peer, key, requester, source, delay_ms):
-        await asyncio.sleep(delay_ms / 1000)
-
-        payload = {
-            "key": key,
-            "node_id": requester,
-            "replica": True,
-            "source": source,
-        }
-
-        await self.post_json(peer, "/cache/invalidate", payload)
+                self.metrics.record_peer_request("get", False)
+                print(f"[{self.node_id}] Error getting from {target_peer}: {e}")
 
     def leader_address(self):
         leader_id = self.raft.leader_id
@@ -409,6 +337,7 @@ class BaseNode:
         try:
             return await request.json(), None
         except Exception:
+            self.metrics.increment("request.invalid_json")
             return None, web.json_response({"status": "error", "message": "body harus JSON valid"}, status=400)
 
     async def forward_to_leader(self, path, payload):
@@ -433,464 +362,13 @@ class BaseNode:
 
         return web.json_response(response, status=200 if response.get("status") != "error" else 409)
 
-    async def acquire_lock(self, request):
-        data, error_response = await self.read_json_body(request)
-        if error_response is not None:
-            return error_response
-
-        resource = data.get("resource")
-        requester = data.get("node_id", self.node_id)
-
-        if self.raft.state != "leader":
-            forwarded = await self.forward_to_leader('/lock/acquire', data)
-            if forwarded is not None:
-                return forwarded
-            return web.json_response({
-                "status": "error",
-                "message": "node ini belum leader",
-                **self.leader_state_payload(),
-            }, status=409)
-
-        if not resource:
-            return web.json_response({"status": "error", "message": "resource wajib diisi"}, status=400)
-
-        granted = self.lock_manager.acquire_lock(resource, requester)
-        if granted:
-            return web.json_response({
-                "status": "ok",
-                "action": "acquire",
-                "resource": resource,
-                "owner": requester,
-                **self.leader_state_payload(),
-            })
-
-        return web.json_response({
-            "status": "locked",
-            "resource": resource,
-            "owner": self.lock_manager.get_owner(resource),
-            **self.leader_state_payload(),
-        }, status=409)
-
-    async def release_lock(self, request):
-        data, error_response = await self.read_json_body(request)
-        if error_response is not None:
-            return error_response
-
-        resource = data.get("resource")
-        requester = data.get("node_id", self.node_id)
-
-        if self.raft.state != "leader":
-            forwarded = await self.forward_to_leader('/lock/release', data)
-            if forwarded is not None:
-                return forwarded
-            return web.json_response({
-                "status": "error",
-                "message": "node ini belum leader",
-                **self.leader_state_payload(),
-            }, status=409)
-
-        if not resource:
-            return web.json_response({"status": "error", "message": "resource wajib diisi"}, status=400)
-
-        released = self.lock_manager.release_lock(resource, requester)
-        if released:
-            return web.json_response({
-                "status": "ok",
-                "action": "release",
-                "resource": resource,
-                "owner": requester,
-                **self.leader_state_payload(),
-            })
-
-        return web.json_response({
-            "status": "error",
-            "message": "lock tidak dimiliki node ini atau belum ada",
-            "resource": resource,
-            "owner": self.lock_manager.get_owner(resource),
-            **self.leader_state_payload(),
-        }, status=409)
-
-    async def lock_status(self, request):
-        if self.raft.state != "leader":
-            forwarded = await self.forward_get_to_leader('/lock/status')
-            if forwarded is not None:
-                return forwarded
-
-        return web.json_response({
-            "status": "ok",
-            "locks": {
-                k: (v["owners"][0] if v.get("mode") == "exclusive" and v.get("owners") else v.get("owners"))
-                for k, v in self.lock_manager.list_locks().items()
-            },
-            **self.leader_state_payload(),
-        })
-
-    async def admin_deadlocks(self, request):
-        if self.raft.state != "leader":
-            forwarded = await self.forward_get_to_leader('/admin/locks/deadlocks')
-            if forwarded is not None:
-                return forwarded
-
-        cycles = self.lock_manager.detect_deadlocks()
-        return web.json_response({
-            "status": "ok",
-            "deadlocks": cycles,
-            "waiters": self.lock_manager.list_waiters(),
-            "locks": self.lock_manager.list_locks(),
-            **self.leader_state_payload(),
-        })
-
-    async def admin_resolve_deadlocks(self, request):
-        data, error_response = await self.read_json_body(request)
-        if error_response is not None:
-            return error_response
-
-        if self.raft.state != "leader":
-            forwarded = await self.forward_to_leader('/admin/locks/resolve', data)
-            if forwarded is not None:
-                return forwarded
-            return web.json_response({"status": "error", "message": "node ini belum leader", **self.leader_state_payload()}, status=409)
-
-        strategy = data.get("strategy", "youngest")
-        victims = self.lock_manager.resolve_deadlocks(strategy=strategy)
-        return web.json_response({
-            "status": "ok",
-            "resolved": victims,
-            **self.leader_state_payload(),
-        })
-
-    async def enqueue_queue(self, request):
-        data, error_response = await self.read_json_body(request)
-        if error_response is not None:
-            return error_response
-
-        item = data.get("item")
-        requester = data.get("node_id", self.node_id)
-
-        if self.raft.state != "leader":
-            forwarded = await self.forward_to_leader('/queue/enqueue', data)
-            if forwarded is not None:
-                return forwarded
-            return web.json_response({
-                "status": "error",
-                "message": "node ini belum leader",
-                **self.leader_state_payload(),
-            }, status=409)
-
-        if item is None:
-            return web.json_response({"status": "error", "message": "item wajib diisi"}, status=400)
-        # route to shard owner; if owner is another peer, forward
-        owner = self.queue_manager.owner_for(item)
-        if owner != self.advertise_addr:
-            # forward to owner; if forwarding fails, fallback to local enqueue
-            payload = {"item": item, "node_id": requester}
-            response = await self.post_json(owner, "/queue/enqueue", payload)
-            if response is None:
-                # fallback: try local enqueue to avoid failing tests or temporary network issues
-                accepted = self.queue_manager.force_enqueue(item, requester)
-                if accepted:
-                    return web.json_response({
-                        "status": "ok",
-                        "action": "enqueue",
-                        "item": item,
-                        "requested_by": requester,
-                        "queue_size": self.queue_manager.size(),
-                        **self.leader_state_payload(),
-                    })
-                return web.json_response({"status": "error", "message": "gagal enqueue"}, status=500)
-            return web.json_response(response)
-
-        accepted = self.queue_manager.enqueue(item, requester)
-        if accepted:
-            # start background replication to peers for durability (leader initiates)
-            asyncio.create_task(self._replicate_enqueue_to_peers(item, requester))
-            return web.json_response({
-                "status": "ok",
-                "action": "enqueue",
-                "item": item,
-                "requested_by": requester,
-                "queue_size": self.queue_manager.size(),
-                **self.leader_state_payload(),
-            })
-
-        return web.json_response({"status": "error", "message": "gagal enqueue"}, status=500)
-
-    async def dequeue_queue(self, request):
-        data, error_response = await self.read_json_body(request)
-        if error_response is not None:
-            return error_response
-
-        requester = data.get("node_id", self.node_id)
-
-        if self.raft.state != "leader":
-            forwarded = await self.forward_to_leader('/queue/dequeue', data)
-            if forwarded is not None:
-                return forwarded
-            return web.json_response({
-                "status": "error",
-                "message": "node ini belum leader",
-                **self.leader_state_payload(),
-            }, status=409)
-
-        item = self.queue_manager.dequeue()
-        if item is None:
-            return web.json_response({
-                "status": "empty",
-                "message": "queue kosong",
-                "requested_by": requester,
-                **self.leader_state_payload(),
-            }, status=404)
-
-        return web.json_response({
-            "status": "ok",
-            "action": "dequeue",
-            "item": item["item"],
-            "enqueued_by": item["node_id"],
-            "requested_by": requester,
-            "queue_size": self.queue_manager.size(),
-            **self.leader_state_payload(),
-        })
-
-    async def queue_status(self, request):
-        if self.raft.state != "leader":
-            forwarded = await self.forward_get_to_leader('/queue/status')
-            if forwarded is not None:
-                return forwarded
-
-        return web.json_response({
-            "status": "ok",
-            "queue": self.queue_manager.list_queue(),
-            "queue_size": self.queue_manager.size(),
-            **self.leader_state_payload(),
-        })
-
-    async def _replicate_enqueue_to_peers(self, item, enqueued_by):
-        # find the most recent pending message (assumes leader just enqueued)
-        pending = self.queue_manager.list_pending()
-        if not pending:
-            return
-        msg = pending[-1]
-        msg_id = msg['id']
-        payload = {"id": msg_id, "item": msg['item'], "node_id": msg['node_id'], "origin": self.node_id}
-
-        async def replicate_to_peer(peer):
-            retries = 0
-            while retries < 5:
-                resp = await self.post_json(peer, '/queue/replicate', payload)
-                if resp and resp.get('status') == 'ok':
-                    # mark ack locally
-                    self.queue_manager.mark_replica_ack(msg_id, peer)
-                    return
-                retries += 1
-                await asyncio.sleep(1 + retries)
-
-        for peer in self.ordered_peers_by_latency():
-            if peer == self.advertise_addr:
-                continue
-            asyncio.create_task(replicate_to_peer(peer))
-
-    async def queue_replicate(self, request):
-        data, err = await self.read_json_body(request)
-        if err is not None:
-            return err
-
-        msg_id = data.get('id')
-        item = data.get('item')
-        node_id = data.get('node_id')
-
-        if not msg_id or item is None:
-            return web.json_response({"status": "error", "message": "invalid payload"}, status=400)
-
-        # persist replica locally
-        self.queue_manager.force_enqueue(item, node_id)
-
-        return web.json_response({"status": "ok", "id": msg_id})
-
-    async def cache_set(self, request):
-        data, error_response = await self.read_json_body(request)
-        if error_response is not None:
-            return error_response
-
-        key = data.get("key")
-        value = data.get("value")
-        requester = data.get("node_id", self.node_id)
-        is_replica = bool(data.get("replica", False))
-
-        if not is_replica and self.raft.state != "leader":
-            forwarded = await self.forward_to_leader('/cache/set', data)
-            if forwarded is not None:
-                return forwarded
-            return web.json_response({
-                "status": "error",
-                "message": "node ini belum leader",
-                **self.leader_state_payload(),
-            }, status=409)
-
-        if not key:
-            return web.json_response({"status": "error", "message": "key wajib diisi"}, status=400)
-
-        stored = self.cache_manager.set(key, value, requester)
-        if stored:
-            entry = self.cache_manager.get(key)
-            if self.raft.state == "leader" and not is_replica:
-                # leader write: set local to Modified and invalidate others
-                asyncio.create_task(self.replicate_cache_invalidate(key, requester))
-
-            return web.json_response({
-                "status": "ok",
-                "action": "set",
-                "key": key,
-                "value": entry["value"],
-                "version": entry["version"],
-                "updated_by": entry["updated_by"],
-                "state": entry.get("state"),
-                "region": self.region,
-                **self.leader_state_payload(),
-            })
-
-        return web.json_response({"status": "error", "message": "gagal menyimpan cache"}, status=500)
-
-    async def cache_get(self, request):
-        key = request.query.get("key")
-
-        if not key:
-            return web.json_response({"status": "error", "message": "key wajib diisi"}, status=400)
-
-        if self.raft.state != "leader":
-            leader_address = self.leader_address()
-            if not leader_address:
-                return web.json_response({
-                    "status": "error",
-                    "message": "leader belum diketahui",
-                    **self.leader_state_payload(),
-                }, status=503)
-
-            if leader_address != f"{self.advertise_host}:{self.port}":
-                response = await self.get_json(leader_address, '/cache/get', params={"key": key})
-                if response is None:
-                    return web.json_response({
-                        "status": "error",
-                        "message": "gagal terhubung ke leader",
-                        **self.leader_state_payload(),
-                    }, status=503)
-
-                return web.json_response(response, status=200 if response.get("status") != "miss" else 404)
-
-        entry = self.cache_manager.get(key)
-        if entry is None:
-            return web.json_response({
-                "status": "miss",
-                "key": key,
-                **self.leader_state_payload(),
-            }, status=404)
-
-        return web.json_response({
-            "status": "ok",
-            "action": "get",
-            "key": key,
-            "value": entry["value"],
-            "version": entry["version"],
-            "updated_by": entry["updated_by"],
-            **self.leader_state_payload(),
-        })
-
-    async def cache_delete(self, request):
-        data, error_response = await self.read_json_body(request)
-        if error_response is not None:
-            return error_response
-
-        key = data.get("key")
-        requester = data.get("node_id", self.node_id)
-        is_replica = bool(data.get("replica", False))
-
-        if not is_replica and self.raft.state != "leader":
-            forwarded = await self.forward_to_leader('/cache/delete', data)
-            if forwarded is not None:
-                return forwarded
-            return web.json_response({
-                "status": "error",
-                "message": "node ini belum leader",
-                **self.leader_state_payload(),
-            }, status=409)
-
-        if not key:
-            return web.json_response({"status": "error", "message": "key wajib diisi"}, status=400)
-
-        deleted = self.cache_manager.delete(key)
-        if deleted:
-            if self.raft.state == "leader" and not is_replica:
-                asyncio.create_task(self.replicate_cache_delete(key, requester))
-                asyncio.create_task(self.replicate_cache_invalidate(key, requester))
-
-            return web.json_response({
-                "status": "ok",
-                "action": "delete",
-                "key": key,
-                "requested_by": requester,
-                "region": self.region,
-                **self.leader_state_payload(),
-            })
-
-        return web.json_response({
-            "status": "miss",
-            "key": key,
-            **self.leader_state_payload(),
-        }, status=404)
-
-    async def cache_invalidate(self, request):
-        data, error_response = await self.read_json_body(request)
-        if error_response is not None:
-            return error_response
-
-        key = data.get("key")
-        requester = data.get("node_id", self.node_id)
-        is_replica = bool(data.get("replica", False))
-
-        if not is_replica and self.raft.state != "leader":
-            forwarded = await self.forward_to_leader('/cache/invalidate', data)
-            if forwarded is not None:
-                return forwarded
-            return web.json_response({
-                "status": "error",
-                "message": "node ini belum leader",
-                **self.leader_state_payload(),
-            }, status=409)
-
-        if not key:
-            return web.json_response({"status": "error", "message": "key wajib diisi"}, status=400)
-
-        invalidated = self.cache_manager.invalidate(key, requester)
-        if invalidated:
-            return web.json_response({
-                "status": "ok",
-                "action": "invalidate",
-                "key": key,
-                "requested_by": requester,
-                **self.leader_state_payload(),
-            })
-
-        return web.json_response({"status": "miss", "key": key}, status=404)
-
-    async def cache_status(self, request):
-        if self.raft.state != "leader":
-            forwarded = await self.forward_get_to_leader('/cache/status')
-            if forwarded is not None:
-                return forwarded
-
-        return web.json_response({
-            "status": "ok",
-            "cache": self.cache_manager.list_cache(),
-            "cache_stats": self.cache_manager.stats(),
-            "region": self.region,
-            **self.leader_state_payload(),
-        })
-            
     async def handle_message(self, request):
         data, error_response = await self.read_json_body(request)
         if error_response is not None:
             return error_response
 
         msg_type = data.get("type")
+        self.metrics.record_message(msg_type or "unknown")
 
         if msg_type == "vote_request":
             response = await self.raft.handle_vote_request(data)
@@ -904,13 +382,32 @@ class BaseNode:
 
         return web.json_response({"status": "ok"})
 
+    async def metrics_status(self, request):
+        self.metrics.set_gauge("raft.state", self.raft.state)
+        self.metrics.set_gauge("raft.leader_id", self.raft.leader_id)
+        self.metrics.set_gauge("cache.size", self.cache_manager.stats().get("size", 0))
+        self.metrics.set_gauge("queue.size", self.queue_manager.size())
+        self.metrics.set_gauge("failure_detector.suspected", self.failure_detector.suspected_peers())
+
+        return web.json_response({
+            "status": "ok",
+            "node": self.node_id,
+            "metrics": self.metrics.snapshot(),
+        })
+
     async def health_check(self, request):
-        return web.json_response({"node": self.node_id})
+        self.metrics.record_request("/health", 200)
+        return web.json_response({
+            "node": self.node_id,
+            "leader_id": self.raft.leader_id,
+            "suspected_peers": self.failure_detector.suspected_peers(),
+        })
 
     def run(self):
         async def on_startup(app):
             import asyncio
             asyncio.create_task(self.raft.start())
+            self.failure_detector.start_background_monitor()
 
         self.app.on_startup.append(on_startup)
 

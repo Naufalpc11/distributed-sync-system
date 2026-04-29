@@ -10,6 +10,17 @@ Implementasi sistem sinkronisasi terdistribusi menggunakan Python dengan konsens
 - Dokumentasi API OpenAPI/Swagger.
 - Penerapan multi-node berbasis Docker.
 
+## Run Paths (Summary)
+
+Kamu bisa menjalankan project lewat 2 jalur utama:
+
+1. Manual (3 proses Python lokal): cocok untuk debug cepat per node.
+2. Docker Compose (3 container): cocok untuk demo, konsisten, dan mudah diulang.
+
+Tambahan opsi manual:
+- Manual + CLI args (`--id --port --peers`)
+- Manual + file `.env` terpisah per node (`.env.node1/.env.node2/.env.node3`)
+
 ## Quick Start
 
 ### 1. Setup Virtual Environment
@@ -178,7 +189,7 @@ Stop container:
 docker compose down
 ```
 
-### 5. Feature B Bonus: Geo-Distributed Demo
+### 5. Feature B: Geo-Distributed Demo
 
 Bonus ini bisa didemokan lewat Docker Compose dengan simulasi latency antar region.
 
@@ -360,6 +371,90 @@ Menjalankan benchmark lokal:
 python benchmarks/load_test_scenarios.py
 ```
 
+Smoke test cepat setelah cluster jalan (manual/docker):
+
+```powershell
+curl.exe -X GET http://localhost:8001/health
+curl.exe -X GET http://localhost:8002/health
+curl.exe -X GET http://localhost:8003/health
+curl.exe -X GET http://localhost:8001/lock/status
+```
+
+Contoh write dari follower (untuk verifikasi forwarding ke leader):
+
+```powershell
+curl.exe -X POST http://localhost:8001/queue/enqueue -H "Content-Type: application/json" -d '{\"item\":\"verify-forward\",\"node_id\":\"node1\"}'
+```
+
+Jika respons tetap `status: ok` dan menyertakan `state: leader`, forwarding berjalan sesuai desain.
+
+### Rejected-to-Success Test Scenarios
+
+Lock (tertolak lalu berhasil):
+
+```powershell
+# 1) node1 acquire lock
+curl.exe -X POST http://localhost:8001/lock/acquire -H "Content-Type: application/json" -d '{\"resource\":\"demo-lock\",\"node_id\":\"node1\"}'
+
+# 2) node2 mencoba acquire resource yang sama (expected: status=locked / HTTP 409)
+curl.exe -X POST http://localhost:8002/lock/acquire -H "Content-Type: application/json" -d '{\"resource\":\"demo-lock\",\"node_id\":\"node2\"}'
+
+# 3) release oleh owner yang benar
+curl.exe -X POST http://localhost:8001/lock/release -H "Content-Type: application/json" -d '{\"resource\":\"demo-lock\",\"node_id\":\"node1\"}'
+
+# 4) node2 acquire ulang (expected: status=ok)
+curl.exe -X POST http://localhost:8002/lock/acquire -H "Content-Type: application/json" -d '{\"resource\":\"demo-lock\",\"node_id\":\"node2\"}'
+```
+
+Queue (empty lalu berhasil):
+
+```powershell
+# 1) dequeue saat queue kosong (expected: status=empty / HTTP 404)
+curl.exe -X POST http://localhost:8001/queue/dequeue -H "Content-Type: application/json" -d '{\"node_id\":\"node1\"}'
+
+# 2) enqueue item
+curl.exe -X POST http://localhost:8002/queue/enqueue -H "Content-Type: application/json" -d '{\"item\":\"job-1\",\"node_id\":\"node1\"}'
+
+# 3) dequeue ulang (expected: status=ok)
+curl.exe -X POST http://localhost:8001/queue/dequeue -H "Content-Type: application/json" -d '{\"node_id\":\"node1\"}'
+```
+
+Cache (miss -> set -> hit -> delete -> miss):
+
+```powershell
+# miss awal
+curl.exe -X GET "http://localhost:8002/cache/get?key=user:1"
+
+# set
+curl.exe -X POST http://localhost:8001/cache/set -H "Content-Type: application/json" -d '{\"key\":\"user:1\",\"value\":{\"name\":\"naufal\"},\"node_id\":\"node1\"}'
+
+# hit
+curl.exe -X GET "http://localhost:8002/cache/get?key=user:1"
+
+# delete
+curl.exe -X POST http://localhost:8001/cache/delete -H "Content-Type: application/json" -d '{\"key\":\"user:1\",\"node_id\":\"node1\"}'
+
+# miss lagi
+curl.exe -X GET "http://localhost:8002/cache/get?key=user:1"
+```
+
+Deadlock detection dan resolve:
+
+```powershell
+curl.exe -X GET http://localhost:8001/admin/locks/deadlocks
+curl.exe -X POST http://localhost:8001/admin/locks/resolve -H "Content-Type: application/json" -d '{\"strategy\":\"youngest\"}'
+```
+
+Pengecekan leader konsisten di 3 node:
+
+```powershell
+curl.exe -X GET http://localhost:8001/lock/status
+curl.exe -X GET http://localhost:8002/lock/status
+curl.exe -X GET http://localhost:8003/lock/status
+```
+
+Expected: `leader_id` sama di ketiga respons.
+
 ## Documentation
 
 OpenAPI tersedia di `/openapi.json`, dan Swagger UI tersedia di `/docs`.
@@ -408,12 +503,12 @@ Struktur proyek:
 ```text
 src/
 |- consensus/
-|  `- raft.py          # implementasi konsensus Raft
+|  `- raft.py          
 |- nodes/
-|  |- base_node.py     # server HTTP node dan penanganan request
-|  |- cache_manager.py # implementasi cache terdistribusi
-|  |- lock_manager.py  # implementasi lock terdistribusi
-|  `- queue_manager.py # implementasi queue terdistribusi
+|  |- base_node.py     
+|  |- cache_manager.py 
+|  |- lock_manager.py  
+|  `- queue_manager.py 
 `- communication/
    `- message_passing.py
 docs/
